@@ -1,0 +1,106 @@
+ALL FEATURES TESTING GUIDE
+
+  1. GPS Broadcasting
+  ┌───────────────┬───────────────────────────────────────────────────────────────────────────┐
+  │     Route     │                               / (Dashboard)                               │
+  ├───────────────┼───────────────────────────────────────────────────────────────────────────┤
+  │ What to click │ Scroll to "Location Broadcasting" card → "Start Broadcasting" button      │
+  ├───────────────┼───────────────────────────────────────────────────────────────────────────┤
+  │ Expected      │ Browser asks for location permission → Shows coordinates → Status: "Live" │
+  └───────────────┴───────────────────────────────────────────────────────────────────────────┘
+  2. Customer Truck Finder (Public)
+  ┌───────────────┬─────────────────────────────────────────────────────┐
+  │     Route     │                    /find-trucks                     │
+  ├───────────────┼─────────────────────────────────────────────────────┤
+  │ What to click │ No login needed - view map with broadcasting trucks │
+  ├───────────────┼─────────────────────────────────────────────────────┤
+  │ Expected      │ Map shows all trucks currently broadcasting         │
+  └───────────────┴─────────────────────────────────────────────────────┘
+  3. AI Features
+  ┌───────────────────────┬─────────────────────────────────────────┐
+  │         Route         │      /ai (AI Features in sidebar)       │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ Tabs to click         │                                         │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ - Recommendations     │ View/generate AI recommendations        │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ - Weather Predictions │ Weather-adjusted demand forecast        │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ - Location AI         │ AI location analysis (takes 3-8 sec)    │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ - Demand Forecast     │ AI prep recommendations (takes 3-8 sec) │
+  ├───────────────────────┼─────────────────────────────────────────┤
+  │ - Menu Optimizer      │ AI menu suggestions (takes 3-8 sec)     │
+  └───────────────────────┴─────────────────────────────────────────┘
+  4. Social Media Auto-Post
+  ┌───────────────┬────────────────────────────────────────┐
+  │     Route     │   /social (Social Media in sidebar)    │
+  ├───────────────┼────────────────────────────────────────┤
+  │ Tabs to click │                                        │
+  ├───────────────┼────────────────────────────────────────┤
+  │ - Posts       │ View/create posts                      │
+  ├───────────────┼────────────────────────────────────────┤
+  │ - Templates   │ "New Template" - create post templates │
+  ├───────────────┼────────────────────────────────────────┤
+  │ - Automation  │ "New Rule" - set auto-post triggers    │
+  ├───────────────┼────────────────────────────────────────┤
+  │ - Accounts    │ "Connect" - connect social accounts    │
+  └───────────────┴────────────────────────────────────────┘
+  5. Pre-Order System
+  ┌──────────────────┬─────────────────────────────┐
+  │  Route (Owner)   │ /orders (Orders in sidebar) │
+  ├──────────────────┼─────────────────────────────┤
+  │ What to look for │ Pre-order settings section  │
+  └──────────────────┴─────────────────────────────┘
+  ┌──────────────────┬─────────────────────────────────────────────┐
+  │ Route (Customer) │           /pre-order/demo-truck-1           │
+  ├──────────────────┼─────────────────────────────────────────────┤
+  │ What to click    │ Select time slot → Add items → Submit order │
+  └──────────────────┴─────────────────────────────────────────────┘
+  6. Events & Calendar
+  ┌────────────────────┬─────────────────────────────────────────────────┐
+  │       Route        │           /events (Events in sidebar)           │
+  ├────────────────────┼─────────────────────────────────────────────────┤
+  │ Tabs to click      │                                                 │
+  ├────────────────────┼─────────────────────────────────────────────────┤
+  │ - Calendar         │ Monthly calendar view with events               │
+  ├────────────────────┼─────────────────────────────────────────────────┤
+  │ - Browse Events    │ List of events → "Register" button opens wizard │
+  ├────────────────────┼─────────────────────────────────────────────────┤
+  │ - My Registrations │ Your event registrations                        │
+  ├────────────────────┼─────────────────────────────────────────────────┤
+  │ - Timeline         │ Event deadlines and tasks                       │
+  └────────────────────┴─────────────────────────────────────────────────┘
+  7. Analytics Dashboard
+  ┌────────────────────┬───────────────────────────────────┐
+  │       Route        │ /analytics (Analytics in sidebar) │
+  ├────────────────────┼───────────────────────────────────┤
+  │ Tabs to click      │                                   │
+  ├────────────────────┼───────────────────────────────────┤
+  │ - Overview         │ Revenue per location summary      │
+  ├────────────────────┼───────────────────────────────────┤
+  │ - Location Ranking │ Leaderboard of locations          │
+  ├────────────────────┼───────────────────────────────────┤
+  │ - Compare          │ Side-by-side location comparison  │
+  ├────────────────────┼───────────────────────────────────┤
+  │ - Performance      │ Revenue/hour, peak hours charts   │
+  ├────────────────────┼───────────────────────────────────┤
+  │ - Goals            │ Set and track revenue goals       │
+  └────────────────────┴───────────────────────────────────┘
+  ---
+  Quick Test Flow:
+
+  1. Run ./start.sh
+  2. Open http://localhost:3000
+  3. Login: demo@foodtruck.com / password123
+
+  Test Each Feature:
+  4. Dashboard → "Start Broadcasting" (GPS)
+  5. New tab → http://localhost:3000/find-trucks (Customer Map)
+  6. AI Features → Click each tab (watch for loading spinners)
+  7. Social Media → Templates, Automation, Accounts tabs
+  8. Events → Calendar tab, click "Register" on an event
+  9. Analytics → All tabs (new in sidebar!)
+  10. New tab → http://localhost:3000/pre-order/demo-truck-1 (Customer Pre-order)
+
+  Restart with ./start.sh to see the new Analytics link in the sidebar!

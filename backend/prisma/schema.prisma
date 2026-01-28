@@ -1,0 +1,832 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USER & AUTH ====================
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String
+  name          String
+  role          UserRole  @default(OWNER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  trucks        Truck[]
+  orders        Order[]
+  notifications Notification[]
+}
+
+enum UserRole {
+  ADMIN
+  OWNER
+  EMPLOYEE
+}
+
+// ==================== TRUCK ====================
+model Truck {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?
+  phone         String?
+  email         String?
+  logo          String?
+  coverImage    String?
+  cuisineType   String?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  ownerId       String
+  owner         User      @relation(fields: [ownerId], references: [id])
+
+  locations     TruckLocation[]
+  menus         Menu[]
+  orders        Order[]
+  inventory     InventoryItem[]
+  prepLists     PrepList[]
+  supplies      Supply[]
+  socialPosts   SocialPost[]
+  sales         Sale[]
+  expenses      Expense[]
+  permits       Permit[]
+  events        EventRegistration[]
+  aiRecommendations AIRecommendation[]
+  liveLocation  TruckLiveLocation?
+  demandPredictions DemandPrediction[]
+  socialTemplates SocialTemplate[]
+  autoPostRules AutoPostRule[]
+  socialAccounts SocialAccount[]
+  preOrderSettings PreOrderSettings?
+  locationAnalytics LocationAnalytics[]
+  locationGoals LocationGoal[]
+}
+
+// ==================== LOCATION MANAGEMENT ====================
+model Location {
+  id            String    @id @default(uuid())
+  name          String
+  address       String
+  city          String
+  state         String
+  zipCode       String
+  latitude      Float?
+  longitude     Float?
+  type          LocationType @default(STREET)
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckLocations TruckLocation[]
+  events        Event[]
+  demandPredictions DemandPrediction[]
+  locationAnalytics LocationAnalytics[]
+  locationGoals LocationGoal[]
+}
+
+enum LocationType {
+  STREET
+  PARKING_LOT
+  PRIVATE_PROPERTY
+  EVENT_VENUE
+  FOOD_COURT
+  MARKET
+}
+
+model TruckLocation {
+  id            String    @id @default(uuid())
+  date          DateTime
+  startTime     String
+  endTime       String
+  status        BookingStatus @default(SCHEDULED)
+  revenue       Float?
+  customerCount Int?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  locationId    String
+  location      Location  @relation(fields: [locationId], references: [id])
+  preOrderWindows PreOrderWindow[]
+}
+
+enum BookingStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model Permit {
+  id            String    @id @default(uuid())
+  permitNumber  String
+  type          PermitType
+  issuingAuthority String
+  issueDate     DateTime
+  expiryDate    DateTime
+  cost          Float?
+  status        PermitStatus @default(ACTIVE)
+  notes         String?
+  documentUrl   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+enum PermitType {
+  HEALTH
+  BUSINESS
+  PARKING
+  FIRE
+  MOBILE_VENDOR
+  SPECIAL_EVENT
+}
+
+enum PermitStatus {
+  ACTIVE
+  EXPIRED
+  PENDING
+  SUSPENDED
+}
+
+model Event {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?
+  startDate     DateTime
+  endDate       DateTime
+  venueAddress  String?
+  expectedAttendance Int?
+  vendorFee     Float?
+  applicationDeadline DateTime?
+  status        EventStatus @default(UPCOMING)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  locationId    String?
+  location      Location? @relation(fields: [locationId], references: [id])
+
+  registrations EventRegistration[]
+  booths        EventBooth[]
+  timeline      EventTimeline[]
+}
+
+enum EventStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+model EventRegistration {
+  id            String    @id @default(uuid())
+  status        RegistrationStatus @default(PENDING)
+  boothNumber   String?
+  notes         String?
+  paymentStatus String?   @default("PENDING")
+  paymentAmount Float?
+  documents     Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  eventId       String
+  event         Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  boothId       String?   @unique
+  booth         EventBooth? @relation(fields: [boothId], references: [id])
+  timeline      EventTimeline[]
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WAITLISTED
+}
+
+// ==================== MENU MANAGEMENT ====================
+model Menu {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?
+  isActive      Boolean   @default(true)
+  isDefault     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+
+  categories    MenuCategory[]
+}
+
+model MenuCategory {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?
+  sortOrder     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  menuId        String
+  menu          Menu      @relation(fields: [menuId], references: [id], onDelete: Cascade)
+
+  items         MenuItem[]
+}
+
+model MenuItem {
+  id            String    @id @default(uuid())
+  name          String
+  description   String?
+  price         Float
+  image         String?
+  isAvailable   Boolean   @default(true)
+  isSoldOut     Boolean   @default(false)
+  isSpecial     Boolean   @default(false)
+  specialPrice  Float?
+  calories      Int?
+  allergens     String[]
+  tags          String[]
+  prepTime      Int?
+  sortOrder     Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  categoryId    String
+  category      MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  orderItems    OrderItem[]
+}
+
+// ==================== ORDER MANAGEMENT ====================
+model Order {
+  id            String    @id @default(uuid())
+  orderNumber   String    @unique
+  status        OrderStatus @default(PENDING)
+  type          OrderType @default(WALK_IN)
+  customerName  String?
+  customerPhone String?
+  customerEmail String?
+  subtotal      Float
+  tax           Float
+  tip           Float     @default(0)
+  total         Float
+  paymentMethod PaymentMethod?
+  paymentStatus PaymentStatus @default(PENDING)
+  notes         String?
+  estimatedReadyTime DateTime?
+  actualReadyTime DateTime?
+  scheduledPickup DateTime?
+  reminderSent  Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?     @relation(fields: [userId], references: [id])
+  pickupWindowId String?
+  pickupWindow  PreOrderWindow? @relation(fields: [pickupWindowId], references: [id])
+
+  items         OrderItem[]
+  notifications OrderNotification[]
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  PICKED_UP
+  CANCELLED
+}
+
+enum OrderType {
+  WALK_IN
+  MOBILE
+  PRE_ORDER
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  APPLE_PAY
+  GOOGLE_PAY
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model OrderItem {
+  id            String    @id @default(uuid())
+  quantity      Int
+  unitPrice     Float
+  totalPrice    Float
+  specialInstructions String?
+  createdAt     DateTime  @default(now())
+
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId    String
+  menuItem      MenuItem  @relation(fields: [menuItemId], references: [id])
+}
+
+model OrderNotification {
+  id            String    @id @default(uuid())
+  type          NotificationType
+  message       String
+  sentAt        DateTime  @default(now())
+
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+enum NotificationType {
+  ORDER_CONFIRMED
+  ORDER_PREPARING
+  ORDER_READY
+  ORDER_PICKED_UP
+}
+
+// ==================== INVENTORY ====================
+model InventoryItem {
+  id            String    @id @default(uuid())
+  name          String
+  category      InventoryCategory
+  quantity      Float
+  unit          String
+  minQuantity   Float
+  maxQuantity   Float?
+  costPerUnit   Float?
+  supplier      String?
+  lastRestocked DateTime?
+  expiryDate    DateTime?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+
+  wasteRecords  WasteRecord[]
+}
+
+enum InventoryCategory {
+  MEAT
+  PRODUCE
+  DAIRY
+  DRY_GOODS
+  BEVERAGES
+  CONDIMENTS
+  PACKAGING
+  CLEANING
+  OTHER
+}
+
+model PrepList {
+  id            String    @id @default(uuid())
+  date          DateTime
+  status        PrepStatus @default(PENDING)
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+
+  items         PrepItem[]
+}
+
+enum PrepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+model PrepItem {
+  id            String    @id @default(uuid())
+  name          String
+  quantity      Float
+  unit          String
+  isCompleted   Boolean   @default(false)
+  completedBy   String?
+  completedAt   DateTime?
+  notes         String?
+
+  prepListId    String
+  prepList      PrepList  @relation(fields: [prepListId], references: [id], onDelete: Cascade)
+}
+
+model Supply {
+  id            String    @id @default(uuid())
+  name          String
+  category      InventoryCategory
+  quantity      Float
+  unit          String
+  unitCost      Float
+  totalCost     Float
+  supplier      String
+  orderDate     DateTime
+  expectedDelivery DateTime?
+  actualDelivery DateTime?
+  status        SupplyStatus @default(ORDERED)
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+enum SupplyStatus {
+  ORDERED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model WasteRecord {
+  id            String    @id @default(uuid())
+  quantity      Float
+  unit          String
+  reason        WasteReason
+  cost          Float?
+  notes         String?
+  recordedAt    DateTime  @default(now())
+
+  inventoryItemId String
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+}
+
+enum WasteReason {
+  EXPIRED
+  SPOILED
+  OVERCOOKED
+  DROPPED
+  QUALITY_ISSUE
+  OTHER
+}
+
+// ==================== SOCIAL MEDIA ====================
+model SocialPost {
+  id            String    @id @default(uuid())
+  platform      SocialPlatform
+  content       String
+  imageUrl      String?
+  scheduledFor  DateTime?
+  postedAt      DateTime?
+  status        PostStatus @default(DRAFT)
+  type          PostType
+  likes         Int       @default(0)
+  comments      Int       @default(0)
+  shares        Int       @default(0)
+  reach         Int       @default(0)
+  isAIGenerated Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+enum SocialPlatform {
+  FACEBOOK
+  INSTAGRAM
+  TWITTER
+  TIKTOK
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  POSTED
+  FAILED
+}
+
+enum PostType {
+  LOCATION_ANNOUNCEMENT
+  DAILY_MENU
+  SPECIAL_PROMOTION
+  PHOTO_SHARE
+  CUSTOMER_ENGAGEMENT
+  EVENT_ANNOUNCEMENT
+}
+
+// ==================== FINANCIAL ====================
+model Sale {
+  id            String    @id @default(uuid())
+  date          DateTime
+  cashSales     Float     @default(0)
+  cardSales     Float     @default(0)
+  mobileSales   Float     @default(0)
+  totalSales    Float
+  transactionCount Int
+  averageTicket Float
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+model Expense {
+  id            String    @id @default(uuid())
+  date          DateTime
+  category      ExpenseCategory
+  description   String
+  amount        Float
+  paymentMethod PaymentMethod?
+  vendor        String?
+  receiptUrl    String?
+  isRecurring   Boolean   @default(false)
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+enum ExpenseCategory {
+  FOOD_SUPPLIES
+  FUEL
+  MAINTENANCE
+  PERMITS
+  INSURANCE
+  MARKETING
+  EQUIPMENT
+  LABOR
+  UTILITIES
+  RENT
+  OTHER
+}
+
+// ==================== AI FEATURES ====================
+model AIRecommendation {
+  id            String    @id @default(uuid())
+  type          AIRecommendationType
+  title         String
+  description   String
+  data          Json?
+  confidence    Float?
+  isActioned    Boolean   @default(false)
+  actionedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  truckId       String
+  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+enum AIRecommendationType {
+  LOCATION
+  MENU
+  DEMAND
+  ROUTE
+  WEATHER
+  SOCIAL_MEDIA
+  CUSTOMER_ENGAGEMENT
+}
+
+// ==================== NOTIFICATIONS ====================
+model Notification {
+  id            String    @id @default(uuid())
+  title         String
+  message       String
+  type          String
+  isRead        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ==================== GPS LOCATION BROADCASTING ====================
+model TruckLiveLocation {
+  id          String   @id @default(uuid())
+  latitude    Float
+  longitude   Float
+  heading     Float?
+  speed       Float?
+  isActive    Boolean  @default(true)
+  lastUpdated DateTime @default(now())
+  truckId     String   @unique
+  truck       Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+model LocationSubscription {
+  id        String   @id @default(uuid())
+  email     String?
+  phone     String?
+  pushToken String?
+  radius    Float    @default(5)
+  latitude  Float
+  longitude Float
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+// ==================== AI DEMAND PREDICTION ====================
+model WeatherCache {
+  id          String   @id @default(uuid())
+  latitude    Float
+  longitude   Float
+  date        DateTime
+  temperature Float
+  conditions  String
+  humidity    Int
+  fetchedAt   DateTime @default(now())
+  @@unique([latitude, longitude, date])
+}
+
+model DemandPrediction {
+  id                 String   @id @default(uuid())
+  date               DateTime
+  dayOfWeek          Int
+  hourStart          Int
+  predictedCustomers Int
+  predictedRevenue   Float
+  confidence         Float
+  weatherFactor      Float?
+  truckId            String
+  truck              Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  locationId         String
+  location           Location @relation(fields: [locationId], references: [id])
+}
+
+// ==================== SOCIAL MEDIA AUTO-POST ====================
+model SocialTemplate {
+  id        String   @id @default(uuid())
+  name      String
+  type      PostType
+  template  String
+  platforms SocialPlatform[]
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  truckId   String
+  truck     Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  autoPostRules AutoPostRule[]
+}
+
+model AutoPostRule {
+  id           String          @id @default(uuid())
+  triggerType  AutoPostTrigger
+  platforms    SocialPlatform[]
+  isActive     Boolean         @default(true)
+  delayMinutes Int             @default(0)
+  truckId      String
+  truck        Truck           @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  templateId   String?
+  template     SocialTemplate? @relation(fields: [templateId], references: [id])
+}
+
+enum AutoPostTrigger {
+  ARRIVAL_AT_LOCATION
+  BOOKING_CONFIRMED
+  DAILY_SCHEDULE
+}
+
+model SocialAccount {
+  id           String         @id @default(uuid())
+  platform     SocialPlatform
+  accountId    String
+  accountName  String
+  accessToken  String
+  refreshToken String?
+  tokenExpiry  DateTime?
+  isConnected  Boolean        @default(true)
+  truckId      String
+  truck        Truck          @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  @@unique([truckId, platform])
+}
+
+// ==================== PRE-ORDER SYSTEM ====================
+model PreOrderWindow {
+  id              String        @id @default(uuid())
+  date            DateTime
+  slotStart       String
+  slotEnd         String
+  maxOrders       Int           @default(5)
+  currentOrders   Int           @default(0)
+  isAvailable     Boolean       @default(true)
+  truckLocationId String
+  truckLocation   TruckLocation @relation(fields: [truckLocationId], references: [id], onDelete: Cascade)
+  orders          Order[]
+  @@unique([truckLocationId, date, slotStart])
+}
+
+model PreOrderSettings {
+  id                  String  @id @default(uuid())
+  defaultSlotDuration Int     @default(15)
+  maxOrdersPerSlot    Int     @default(5)
+  advanceBookingHours Int     @default(24)
+  cutoffMinutes       Int     @default(30)
+  autoGenerateSlots   Boolean @default(true)
+  isEnabled           Boolean @default(true)
+  truckId             String  @unique
+  truck               Truck   @relation(fields: [truckId], references: [id], onDelete: Cascade)
+}
+
+// ==================== EVENT BOOKING CALENDAR ====================
+model EventBooth {
+  id           String             @id @default(uuid())
+  boothNumber  String
+  location     String?
+  size         BoothSize          @default(STANDARD)
+  price        Float?
+  amenities    String[]
+  isAvailable  Boolean            @default(true)
+  eventId      String
+  event        Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  registration EventRegistration?
+}
+
+enum BoothSize {
+  SMALL
+  STANDARD
+  LARGE
+  PREMIUM
+}
+
+model EventTimeline {
+  id             String             @id @default(uuid())
+  title          String
+  description    String?
+  dueDate        DateTime
+  isCompleted    Boolean            @default(false)
+  completedAt    DateTime?
+  type           TimelineType
+  eventId        String?
+  event          Event?             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  registrationId String?
+  registration   EventRegistration? @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+}
+
+enum TimelineType {
+  APPLICATION_DEADLINE
+  PAYMENT_DUE
+  DOCUMENT_SUBMISSION
+  SETUP_TIME
+  EVENT_START
+  EVENT_END
+  CUSTOM
+}
+
+// ==================== REVENUE PER LOCATION ANALYTICS ====================
+model LocationAnalytics {
+  id                 String   @id @default(uuid())
+  date               DateTime
+  revenue            Float
+  expenses           Float?
+  customerCount      Int
+  orderCount         Int
+  averageOrderValue  Float
+  peakHour           Int?
+  topSellingItems    Json?
+  weatherCondition   String?
+  operatingHours     Float
+  revenuePerHour     Float
+  revenuePerCustomer Float
+  truckId            String
+  truck              Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  locationId         String
+  location           Location @relation(fields: [locationId], references: [id])
+  @@unique([truckId, locationId, date])
+}
+
+model LocationGoal {
+  id              String     @id @default(uuid())
+  targetRevenue   Float
+  targetCustomers Int?
+  period          GoalPeriod
+  startDate       DateTime
+  endDate         DateTime
+  truckId         String
+  truck           Truck      @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  locationId      String
+  location        Location   @relation(fields: [locationId], references: [id])
+}
+
+enum GoalPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+}
