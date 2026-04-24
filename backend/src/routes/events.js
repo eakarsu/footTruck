@@ -1,39 +1,43 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all events
+// Get all events (with pagination and search)
 router.get('/', authenticate, async (req, res) => {
   try {
     const { status, upcoming } = req.query;
+    const { page, limit, skip, search } = getPaginationParams(req.query);
 
     const whereClause = {};
+    if (status) whereClause.status = status;
+    if (upcoming === 'true') whereClause.startDate = { gte: new Date() };
 
-    if (status) {
-      whereClause.status = status;
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } },
+        { venueAddress: { contains: search, mode: 'insensitive' } }
+      ];
     }
 
-    if (upcoming === 'true') {
-      whereClause.startDate = {
-        gte: new Date()
-      };
-    }
+    const [events, total] = await Promise.all([
+      prisma.event.findMany({
+        where: whereClause,
+        include: { location: true, registrations: { include: { truck: true } } },
+        orderBy: { startDate: 'asc' },
+        skip,
+        take: limit
+      }),
+      prisma.event.count({ where: whereClause })
+    ]);
 
-    const events = await prisma.event.findMany({
-      where: whereClause,
-      include: {
-        location: true,
-        registrations: {
-          include: { truck: true }
-        }
-      },
-      orderBy: { startDate: 'asc' }
-    });
-
-    res.json(events);
+    res.json(paginatedResponse(events, total, page, limit));
   } catch (error) {
     console.error('Get events error:', error);
     res.status(500).json({ error: 'Failed to get events' });
@@ -635,6 +639,62 @@ router.patch('/registration/:regId/payment', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Update payment error:', error);
     res.status(500).json({ error: 'Failed to update payment status' });
+  }
+});
+
+// ==================== BULK OPERATIONS & EXPORTS ====================
+
+// Bulk delete events
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.event.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} events deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk delete events' });
+  }
+});
+
+// Bulk update events
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.event.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} events updated successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk update events' });
+  }
+});
+
+// Export events as CSV
+router.get('/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const events = await prisma.event.findMany({ include: { location: true }, orderBy: { startDate: 'asc' } });
+    const data = events.map(e => ({
+      name: e.name, startDate: e.startDate.toISOString().split('T')[0], endDate: e.endDate.toISOString().split('T')[0],
+      venue: e.venueAddress || '', status: e.status, expectedAttendance: e.expectedAttendance || '',
+      vendorFee: e.vendorFee || '', location: e.location?.name || ''
+    }));
+    sendCSV(res, data, ['name', 'startDate', 'endDate', 'venue', 'status', 'expectedAttendance', 'vendorFee', 'location'], 'events-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export events' });
+  }
+});
+
+// Export events as PDF
+router.get('/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const events = await prisma.event.findMany({ orderBy: { startDate: 'asc' } });
+    const columns = ['Name', 'Start Date', 'End Date', 'Status', 'Attendance', 'Vendor Fee'];
+    const rows = events.map(e => [
+      e.name, e.startDate.toLocaleDateString(), e.endDate.toLocaleDateString(),
+      e.status, e.expectedAttendance || '-', e.vendorFee ? `$${e.vendorFee.toFixed(2)}` : '-'
+    ]);
+    sendPDF(res, 'Events Report', columns, rows, 'events-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export events' });
   }
 });
 

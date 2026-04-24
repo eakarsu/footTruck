@@ -2,10 +2,14 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { TruckProvider } from './context/TruckContext';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Pages
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import Dashboard from './pages/Dashboard';
 import Locations from './pages/Locations';
 import Menu from './pages/Menu';
@@ -45,6 +49,9 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/find-trucks" element={<CustomerMap />} />
       <Route path="/pre-order/:truckId" element={<PreOrder />} />
       <Route
@@ -53,20 +60,22 @@ function AppRoutes() {
           <ProtectedRoute>
             <TruckProvider>
               <Layout>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/locations" element={<Locations />} />
-                  <Route path="/menu" element={<Menu />} />
-                  <Route path="/orders" element={<Orders />} />
-                  <Route path="/inventory" element={<Inventory />} />
-                  <Route path="/social" element={<Social />} />
-                  <Route path="/financial" element={<Financial />} />
-                  <Route path="/events" element={<Events />} />
-                  <Route path="/permits" element={<Permits />} />
-                  <Route path="/ai" element={<AI />} />
-                  <Route path="/analytics" element={<Analytics />} />
-                  <Route path="/settings" element={<Settings />} />
-                </Routes>
+                <ErrorBoundary>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/locations" element={<Locations />} />
+                    <Route path="/menu" element={<Menu />} />
+                    <Route path="/orders" element={<Orders />} />
+                    <Route path="/inventory" element={<Inventory />} />
+                    <Route path="/social" element={<Social />} />
+                    <Route path="/financial" element={<Financial />} />
+                    <Route path="/events" element={<Events />} />
+                    <Route path="/permits" element={<Permits />} />
+                    <Route path="/ai" element={<AI />} />
+                    <Route path="/analytics" element={<Analytics />} />
+                    <Route path="/settings" element={<Settings />} />
+                  </Routes>
+                </ErrorBoundary>
               </Layout>
             </TruckProvider>
           </ProtectedRoute>
@@ -80,7 +89,9 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <ErrorBoundary>
+          <AppRoutes />
+        </ErrorBoundary>
         <Toaster
           position="top-right"
           toastOptions={{

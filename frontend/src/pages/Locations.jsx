@@ -1,12 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { locationsAPI } from '../services/api';
 import {
   MapPin, Plus, Calendar, Clock, DollarSign, Users,
-  Edit2, Trash2, X, Check, ChevronLeft, ChevronRight
+  Edit2, Trash2, X, Check, ChevronLeft, ChevronRight,
+  Download, FileDown, CheckSquare
 } from 'lucide-react';
 import { format, addDays, startOfWeek, endOfWeek, eachDayOfInterval, isSameDay } from 'date-fns';
 import toast from 'react-hot-toast';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
+
+const locationDetailFields = [
+  { key: 'name', label: 'Name' },
+  { key: 'address', label: 'Address' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'zipCode', label: 'Zip Code' },
+  { key: 'type', label: 'Type', render: (v) => v?.replace('_', ' ') },
+  { key: 'notes', label: 'Notes' }
+];
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 export default function Locations() {
   const { selectedTruck } = useTruck();
@@ -27,16 +53,55 @@ export default function Locations() {
     locationId: '', date: '', startTime: '', endTime: '', notes: ''
   });
 
+  // New state for search, pagination, bulk ops, detail modal, confirm dialog
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
   useEffect(() => {
     if (selectedTruck) {
       loadData();
     }
   }, [selectedTruck, currentWeek]);
 
+  // Reload locations when search or page changes
+  useEffect(() => {
+    if (selectedTruck) {
+      loadLocations();
+    }
+  }, [search, page]);
+
+  // Reset page when search changes
+  const handleSearchChange = useCallback((value) => {
+    setSearch(value);
+    setPage(1);
+    setSelectedIds(new Set());
+  }, []);
+
+  const loadLocations = async () => {
+    try {
+      const locRes = await locationsAPI.getAll({ page, limit: 20, search });
+      setLocations(locRes.data);
+      if (locRes.pagination) {
+        setPage(locRes.pagination.page);
+        setTotalPages(locRes.pagination.totalPages);
+        setTotal(locRes.pagination.total);
+      }
+    } catch (error) {
+      console.error('Failed to load locations:', error);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [locRes, calRes, histRes] = await Promise.all([
-        locationsAPI.getAll(),
+        locationsAPI.getAll({ page, limit: 20, search }),
         locationsAPI.getCalendar(selectedTruck.id, {
           startDate: startOfWeek(currentWeek).toISOString(),
           endDate: endOfWeek(currentWeek).toISOString()
@@ -44,6 +109,11 @@ export default function Locations() {
         locationsAPI.getHistory(selectedTruck.id)
       ]);
       setLocations(locRes.data);
+      if (locRes.pagination) {
+        setPage(locRes.pagination.page);
+        setTotalPages(locRes.pagination.totalPages);
+        setTotal(locRes.pagination.total);
+      }
       setCalendar(calRes.data);
       setHistory(histRes.data);
     } catch (error) {
@@ -78,13 +148,57 @@ export default function Locations() {
   };
 
   const handleDeleteLocation = async (id) => {
-    if (!confirm('Are you sure you want to delete this location?')) return;
+    setConfirmAction(() => async () => {
+      try {
+        await locationsAPI.delete(id);
+        toast.success('Location deleted');
+        setShowDetail(false);
+        setDetailItem(null);
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete location');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmAction(() => async () => {
+      try {
+        await locationsAPI.bulkDelete([...selectedIds]);
+        toast.success(`${selectedIds.size} location(s) deleted`);
+        setSelectedIds(new Set());
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete locations');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleExportCSV = async () => {
     try {
-      await locationsAPI.delete(id);
-      toast.success('Location deleted');
-      loadData();
+      const blob = await locationsAPI.exportCSV();
+      downloadBlob(blob, 'locations.csv');
+      toast.success('CSV exported');
     } catch (error) {
-      toast.error('Failed to delete location');
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const blob = await locationsAPI.exportPDF();
+      downloadBlob(blob, 'locations.pdf');
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
     }
   };
 
@@ -108,14 +222,16 @@ export default function Locations() {
   };
 
   const handleDeleteBooking = async (id) => {
-    if (!confirm('Are you sure you want to cancel this booking?')) return;
-    try {
-      await locationsAPI.deleteBooking(id);
-      toast.success('Booking cancelled');
-      loadData();
-    } catch (error) {
-      toast.error('Failed to cancel booking');
-    }
+    setConfirmAction(() => async () => {
+      try {
+        await locationsAPI.deleteBooking(id);
+        toast.success('Booking cancelled');
+        loadData();
+      } catch (error) {
+        toast.error('Failed to cancel booking');
+      }
+    });
+    setShowConfirm(true);
   };
 
   const handleCompleteBooking = async (booking) => {
@@ -160,6 +276,59 @@ export default function Locations() {
       notes: booking.notes || ''
     });
     setShowBookingModal(true);
+  };
+
+  // Detail modal handlers
+  const handleRowClick = (loc) => {
+    setDetailItem(loc);
+    setShowDetail(true);
+  };
+
+  const handleDetailEdit = (loc) => {
+    setShowDetail(false);
+    setDetailItem(null);
+    openEditLocation(loc);
+  };
+
+  const handleDetailDelete = (loc) => {
+    setShowDetail(false);
+    handleDeleteLocation(loc.id);
+  };
+
+  // Checkbox toggle for bulk selection
+  const toggleSelect = (id, e) => {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === locations.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(locations.map((l) => l.id)));
+    }
+  };
+
+  // Confirm dialog handlers
+  const handleConfirm = async () => {
+    setShowConfirm(false);
+    if (confirmAction) {
+      await confirmAction();
+      setConfirmAction(null);
+    }
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
   };
 
   if (loading) {
@@ -278,46 +447,119 @@ export default function Locations() {
 
       {/* Locations List */}
       {activeTab === 'locations' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {locations.map(loc => (
-            <div key={loc.id} className="card p-4">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center">
-                    <MapPin className="h-5 w-5 text-primary-600" />
+        <div className="space-y-4">
+          {/* Search Bar */}
+          <SearchBar
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Search locations..."
+          />
+
+          {/* Toolbar: selected count, bulk delete, export */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={toggleSelectAll}
+                className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                <CheckSquare className="h-4 w-4" />
+                {selectedIds.size === locations.length && locations.length > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedIds.size > 0 && (
+                <>
+                  <span className="text-sm text-gray-500">
+                    {selectedIds.size} selected
+                  </span>
+                  <button
+                    onClick={handleBulkDelete}
+                    className="btn bg-red-600 text-white hover:bg-red-700 text-sm py-1 px-3 flex items-center gap-1"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete Selected
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportCSV}
+                className="btn btn-secondary text-sm py-1 px-3 flex items-center gap-1"
+              >
+                <Download className="h-3.5 w-3.5" />
+                CSV
+              </button>
+              <button
+                onClick={handleExportPDF}
+                className="btn btn-secondary text-sm py-1 px-3 flex items-center gap-1"
+              >
+                <FileDown className="h-3.5 w-3.5" />
+                PDF
+              </button>
+            </div>
+          </div>
+
+          {/* Location Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {locations.map(loc => (
+              <div
+                key={loc.id}
+                className="card p-4 cursor-pointer hover:shadow-md transition-shadow"
+                onClick={() => handleRowClick(loc)}
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    {/* Checkbox */}
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(loc.id)}
+                      onChange={(e) => toggleSelect(loc.id, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <div className="h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center">
+                      <MapPin className="h-5 w-5 text-primary-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{loc.name}</h3>
+                      <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
+                        {loc.type.replace('_', ' ')}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-semibold text-gray-900">{loc.name}</h3>
-                    <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
-                      {loc.type.replace('_', ' ')}
-                    </span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditLocation(loc); }}
+                      className="p-1.5 hover:bg-gray-100 rounded"
+                    >
+                      <Edit2 className="h-4 w-4 text-gray-500" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDeleteLocation(loc.id); }}
+                      className="p-1.5 hover:bg-gray-100 rounded"
+                    >
+                      <Trash2 className="h-4 w-4 text-red-500" />
+                    </button>
                   </div>
                 </div>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => openEditLocation(loc)}
-                    className="p-1.5 hover:bg-gray-100 rounded"
-                  >
-                    <Edit2 className="h-4 w-4 text-gray-500" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteLocation(loc.id)}
-                    className="p-1.5 hover:bg-gray-100 rounded"
-                  >
-                    <Trash2 className="h-4 w-4 text-red-500" />
-                  </button>
-                </div>
+                <p className="text-sm text-gray-600">{loc.address}</p>
+                <p className="text-sm text-gray-500">{loc.city}, {loc.state} {loc.zipCode}</p>
               </div>
-              <p className="text-sm text-gray-600">{loc.address}</p>
-              <p className="text-sm text-gray-500">{loc.city}, {loc.state} {loc.zipCode}</p>
-            </div>
-          ))}
-          {locations.length === 0 && (
-            <div className="col-span-full text-center py-12">
-              <MapPin className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500">No locations added yet</p>
-            </div>
-          )}
+            ))}
+            {locations.length === 0 && (
+              <div className="col-span-full text-center py-12">
+                <MapPin className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500">No locations found</p>
+              </div>
+            )}
+          </div>
+
+          {/* Pagination */}
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={setPage}
+          />
         </div>
       )}
 
@@ -579,6 +821,29 @@ export default function Locations() {
           </div>
         </div>
       )}
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title={detailItem?.name || 'Location Details'}
+        data={detailItem}
+        fields={locationDetailFields}
+        onClose={() => { setShowDetail(false); setDetailItem(null); }}
+        onEdit={handleDetailEdit}
+        onDelete={handleDetailDelete}
+      />
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title="Confirm Delete"
+        message="Are you sure you want to delete? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 }

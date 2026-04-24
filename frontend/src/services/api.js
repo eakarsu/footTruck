@@ -33,9 +33,15 @@ api.interceptors.response.use(
 export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   register: (data) => api.post('/auth/register', data),
+  logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
   updateProfile: (data) => api.put('/auth/profile', data),
-  changePassword: (data) => api.put('/auth/password', data)
+  changePassword: (data) => api.put('/auth/password', data),
+  requestPasswordReset: (data) => api.post('/auth/password-reset/request', data),
+  confirmPasswordReset: (data) => api.post('/auth/password-reset/confirm', data),
+  verifyEmail: (data) => api.post('/auth/verify-email', data),
+  resendVerification: () => api.post('/auth/resend-verification'),
+  checkPasswordStrength: (data) => api.post('/auth/check-password-strength', data)
 };
 
 // Trucks
@@ -49,11 +55,15 @@ export const trucksAPI = {
 
 // Locations
 export const locationsAPI = {
-  getAll: () => api.get('/locations'),
+  getAll: (params) => api.get('/locations', { params }),
   getOne: (id) => api.get(`/locations/${id}`),
   create: (data) => api.post('/locations', data),
   update: (id, data) => api.put(`/locations/${id}`, data),
   delete: (id) => api.delete(`/locations/${id}`),
+  bulkDelete: (ids) => api.delete('/locations/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/locations/bulk-update', { ids, data }),
+  exportCSV: () => api.get('/locations/export/csv', { responseType: 'blob' }),
+  exportPDF: () => api.get('/locations/export/pdf', { responseType: 'blob' }),
   getCalendar: (truckId, params) => api.get(`/locations/truck/${truckId}/calendar`, { params }),
   bookLocation: (truckId, data) => api.post(`/locations/truck/${truckId}/book`, data),
   updateBooking: (id, data) => api.put(`/locations/booking/${id}`, data),
@@ -63,7 +73,7 @@ export const locationsAPI = {
 
 // Menus
 export const menusAPI = {
-  getByTruck: (truckId) => api.get(`/menus/truck/${truckId}`),
+  getByTruck: (truckId, params) => api.get(`/menus/truck/${truckId}`, { params }),
   getOne: (id) => api.get(`/menus/${id}`),
   create: (data) => api.post('/menus', data),
   update: (id, data) => api.put(`/menus/${id}`, data),
@@ -77,7 +87,11 @@ export const menusAPI = {
   createItem: (categoryId, data) => api.post(`/menus/categories/${categoryId}/items`, data),
   updateItem: (id, data) => api.put(`/menus/items/${id}`, data),
   toggleSoldOut: (id) => api.patch(`/menus/items/${id}/soldout`),
-  deleteItem: (id) => api.delete(`/menus/items/${id}`)
+  deleteItem: (id) => api.delete(`/menus/items/${id}`),
+  bulkDeleteItems: (ids) => api.delete('/menus/items/bulk-delete', { data: { ids } }),
+  bulkUpdateItems: (ids, data) => api.patch('/menus/items/bulk-update', { ids, data }),
+  exportCSV: (truckId) => api.get(`/menus/truck/${truckId}/export/csv`, { responseType: 'blob' }),
+  exportPDF: (truckId) => api.get(`/menus/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // Orders
@@ -97,7 +111,11 @@ export const ordersAPI = {
   updatePreOrderSettings: (truckId, data) => api.put(`/orders/truck/${truckId}/pre-order/settings`, data),
   createPreOrder: (data) => api.post('/orders/public/pre-order', data),
   getPublicSlots: (truckId, params) => api.get(`/orders/public/truck/${truckId}/available-slots`, { params }),
-  trackOrder: (orderNumber) => api.get(`/orders/public/order/${orderNumber}`)
+  trackOrder: (orderNumber) => api.get(`/orders/public/order/${orderNumber}`),
+  bulkDelete: (ids) => api.delete('/orders/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/orders/bulk-update', { ids, data }),
+  exportCSV: (truckId) => api.get(`/orders/truck/${truckId}/export/csv`, { responseType: 'blob' }),
+  exportPDF: (truckId) => api.get(`/orders/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // Inventory
@@ -119,7 +137,11 @@ export const inventoryAPI = {
   updateSupplyStatus: (id, status) => api.patch(`/inventory/supplies/${id}/status`, { status }),
   deleteSupply: (id) => api.delete(`/inventory/supplies/${id}`),
   recordWaste: (data) => api.post('/inventory/waste', data),
-  getWaste: (truckId, params) => api.get(`/inventory/truck/${truckId}/waste`, { params })
+  getWaste: (truckId, params) => api.get(`/inventory/truck/${truckId}/waste`, { params }),
+  bulkDelete: (ids) => api.delete('/inventory/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/inventory/bulk-update', { ids, data }),
+  exportCSV: (truckId) => api.get(`/inventory/truck/${truckId}/export/csv`, { responseType: 'blob' }),
+  exportPDF: (truckId) => api.get(`/inventory/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // Social
@@ -152,7 +174,11 @@ export const socialAPI = {
   disconnectAccount: (id) => api.delete(`/social/accounts/${id}`),
   refreshAccountToken: (id) => api.post(`/social/accounts/${id}/refresh`),
   // Trigger
-  triggerArrival: (truckId, data) => api.post(`/social/truck/${truckId}/trigger-arrival`, data)
+  triggerArrival: (truckId, data) => api.post(`/social/truck/${truckId}/trigger-arrival`, data),
+  bulkDelete: (ids) => api.delete('/social/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/social/bulk-update', { ids, data }),
+  exportCSV: (truckId) => api.get(`/social/truck/${truckId}/export/csv`, { responseType: 'blob' }),
+  exportPDF: (truckId) => api.get(`/social/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // Financial
@@ -180,7 +206,14 @@ export const financialAPI = {
   createGoal: (truckId, data) => api.post(`/financial/truck/${truckId}/goals`, data),
   updateGoal: (truckId, id, data) => api.put(`/financial/truck/${truckId}/goals/${id}`, data),
   deleteGoal: (truckId, id) => api.delete(`/financial/truck/${truckId}/goals/${id}`),
-  getGoalProgress: (goalId) => api.get(`/financial/goals/${goalId}/progress`)
+  getGoalProgress: (goalId) => api.get(`/financial/goals/${goalId}/progress`),
+  bulkDeleteExpenses: (ids) => api.delete('/financial/expenses/bulk-delete', { data: { ids } }),
+  bulkUpdateExpenses: (ids, data) => api.patch('/financial/expenses/bulk-update', { ids, data }),
+  bulkDeleteSales: (ids) => api.delete('/financial/sales/bulk-delete', { data: { ids } }),
+  exportSalesCSV: (truckId) => api.get(`/financial/truck/${truckId}/sales/export/csv`, { responseType: 'blob' }),
+  exportSalesPDF: (truckId) => api.get(`/financial/truck/${truckId}/sales/export/pdf`, { responseType: 'blob' }),
+  exportExpensesCSV: (truckId) => api.get(`/financial/truck/${truckId}/expenses/export/csv`, { responseType: 'blob' }),
+  exportExpensesPDF: (truckId) => api.get(`/financial/truck/${truckId}/expenses/export/pdf`, { responseType: 'blob' })
 };
 
 // Events
@@ -212,7 +245,11 @@ export const eventsAPI = {
   // Calendar
   getCalendar: (params) => api.get('/events/calendar', { params }),
   // Payment
-  updatePayment: (registrationId, data) => api.patch(`/events/registration/${registrationId}/payment`, data)
+  updatePayment: (registrationId, data) => api.patch(`/events/registration/${registrationId}/payment`, data),
+  bulkDelete: (ids) => api.delete('/events/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/events/bulk-update', { ids, data }),
+  exportCSV: () => api.get('/events/export/csv', { responseType: 'blob' }),
+  exportPDF: () => api.get('/events/export/pdf', { responseType: 'blob' })
 };
 
 // Permits
@@ -224,7 +261,11 @@ export const permitsAPI = {
   delete: (id) => api.delete(`/permits/${id}`),
   getAlerts: (truckId) => api.get(`/permits/truck/${truckId}/alerts`),
   renew: (id, data) => api.post(`/permits/${id}/renew`, data),
-  getSummary: (truckId) => api.get(`/permits/truck/${truckId}/summary`)
+  getSummary: (truckId) => api.get(`/permits/truck/${truckId}/summary`),
+  bulkDelete: (ids) => api.delete('/permits/bulk-delete', { data: { ids } }),
+  bulkUpdate: (ids, data) => api.patch('/permits/bulk-update', { ids, data }),
+  exportCSV: (truckId) => api.get(`/permits/truck/${truckId}/export/csv`, { responseType: 'blob' }),
+  exportPDF: (truckId) => api.get(`/permits/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // AI

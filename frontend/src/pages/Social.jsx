@@ -1,14 +1,42 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { socialAPI } from '../services/api';
-import { Share2, Plus, Edit2, Trash2, X, Send, Calendar, Instagram, Facebook, Twitter, FileText, Zap, Link2 } from 'lucide-react';
+import { Share2, Plus, Edit2, Trash2, X, Send, Calendar, Instagram, Facebook, Twitter, FileText, Zap, Link2, Download, FileDown, CheckSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import SocialTemplateEditor from '../components/SocialTemplateEditor';
 import AutoPostRules from '../components/AutoPostRules';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
 
 const platforms = ['FACEBOOK', 'INSTAGRAM', 'TWITTER', 'TIKTOK'];
 const postTypes = ['LOCATION_ANNOUNCEMENT', 'DAILY_MENU', 'SPECIAL_PROMOTION', 'PHOTO_SHARE', 'CUSTOMER_ENGAGEMENT', 'EVENT_ANNOUNCEMENT'];
+
+const postDetailFields = [
+  { key: 'platform', label: 'Platform' },
+  { key: 'content', label: 'Content' },
+  { key: 'type', label: 'Type', render: (v) => v?.replace(/_/g, ' ') },
+  { key: 'status', label: 'Status' },
+  { key: 'likes', label: 'Likes' },
+  { key: 'comments', label: 'Comments' },
+  { key: 'shares', label: 'Shares' },
+  { key: 'reach', label: 'Reach' },
+  { key: 'scheduledFor', label: 'Scheduled For', render: (v) => v ? format(new Date(v), 'MMM d, yyyy h:mm a') : '-' },
+  { key: 'postedAt', label: 'Posted At', render: (v) => v ? format(new Date(v), 'MMM d, yyyy h:mm a') : '-' }
+];
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 export default function Social() {
   const { selectedTruck } = useTruck();
@@ -22,18 +50,60 @@ export default function Social() {
   const [editingPost, setEditingPost] = useState(null);
   const [postForm, setPostForm] = useState({ platform: 'INSTAGRAM', content: '', type: 'CUSTOMER_ENGAGEMENT', scheduledFor: '' });
 
+  // New state for search, pagination, bulk ops, detail modal, confirm dialog
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
   useEffect(() => {
     if (selectedTruck) loadData();
   }, [selectedTruck]);
 
+  // Reload posts when search or page changes
+  useEffect(() => {
+    if (selectedTruck) loadPosts();
+  }, [search, page, selectedTruck]);
+
+  // Reset page when search changes
+  const handleSearchChange = useCallback((value) => {
+    setSearch(value);
+    setPage(1);
+    setSelectedIds(new Set());
+  }, []);
+
+  const loadPosts = async () => {
+    try {
+      const postsRes = await socialAPI.getByTruck(selectedTruck.id, { page, limit: 20, search });
+      setPosts(postsRes.data);
+      if (postsRes.pagination) {
+        setPage(postsRes.pagination.page);
+        setTotalPages(postsRes.pagination.totalPages);
+        setTotal(postsRes.pagination.total);
+      }
+    } catch (error) {
+      console.error('Failed to load posts:', error);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [postsRes, analyticsRes, accountsRes] = await Promise.all([
-        socialAPI.getByTruck(selectedTruck.id),
+        socialAPI.getByTruck(selectedTruck.id, { page, limit: 20, search }),
         socialAPI.getAnalytics(selectedTruck.id),
         socialAPI.getAccounts(selectedTruck.id)
       ]);
       setPosts(postsRes.data);
+      if (postsRes.pagination) {
+        setPage(postsRes.pagination.page);
+        setTotalPages(postsRes.pagination.totalPages);
+        setTotal(postsRes.pagination.total);
+      }
       setAnalytics(analyticsRes.data);
       setAccounts(accountsRes.data);
     } catch (error) {
@@ -61,14 +131,16 @@ export default function Social() {
   };
 
   const handleDisconnectAccount = async (accountId) => {
-    if (!confirm('Disconnect this account?')) return;
-    try {
-      await socialAPI.disconnectAccount(accountId);
-      toast.success('Account disconnected');
-      loadData();
-    } catch (error) {
-      toast.error('Failed to disconnect account');
-    }
+    setConfirmAction(() => async () => {
+      try {
+        await socialAPI.disconnectAccount(accountId);
+        toast.success('Account disconnected');
+        loadData();
+      } catch (error) {
+        toast.error('Failed to disconnect account');
+      }
+    });
+    setShowConfirm(true);
   };
 
   const handleSavePost = async (e) => {
@@ -100,13 +172,75 @@ export default function Social() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this post?')) return;
+    setConfirmAction(() => async () => {
+      try {
+        await socialAPI.delete(id);
+        toast.success('Post deleted');
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete post');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmAction(() => async () => {
+      try {
+        await socialAPI.bulkDelete([...selectedIds]);
+        toast.success(`${selectedIds.size} post(s) deleted`);
+        setSelectedIds(new Set());
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete posts');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleExportCSV = async () => {
     try {
-      await socialAPI.delete(id);
-      toast.success('Post deleted');
-      loadData();
+      const blob = await socialAPI.exportCSV(selectedTruck.id);
+      downloadBlob(blob, `social-posts-${selectedTruck.name}.csv`);
+      toast.success('CSV exported');
     } catch (error) {
-      toast.error('Failed to delete post');
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const blob = await socialAPI.exportPDF(selectedTruck.id);
+      downloadBlob(blob, `social-posts-${selectedTruck.name}.pdf`);
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
+    }
+  };
+
+  const toggleSelectId = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === posts.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(posts.map(p => p.id)));
     }
   };
 
@@ -121,6 +255,21 @@ export default function Social() {
     setShowPostModal(true);
   };
 
+  const handlePostCardClick = (post) => {
+    setDetailItem(post);
+    setShowDetail(true);
+  };
+
+  const handleDetailEdit = (post) => {
+    setShowDetail(false);
+    openEditPost(post);
+  };
+
+  const handleDetailDelete = (post) => {
+    setShowDetail(false);
+    handleDelete(post.id);
+  };
+
   const getPlatformIcon = (platform) => {
     switch (platform) {
       case 'INSTAGRAM': return <Instagram className="h-5 w-5 text-pink-600" />;
@@ -128,6 +277,17 @@ export default function Social() {
       case 'TWITTER': return <Twitter className="h-5 w-5 text-sky-500" />;
       default: return <Share2 className="h-5 w-5" />;
     }
+  };
+
+  const handleConfirm = async () => {
+    setShowConfirm(false);
+    if (confirmAction) await confirmAction();
+    setConfirmAction(null);
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
   };
 
   if (loading) {
@@ -172,44 +332,105 @@ export default function Social() {
 
       {/* Posts */}
       {activeTab === 'posts' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {posts.map(post => (
-            <div key={post.id} className="card p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  {getPlatformIcon(post.platform)}
-                  <span className="text-sm font-medium">{post.platform}</span>
-                </div>
-                <span className={`px-2 py-0.5 text-xs rounded-full ${
-                  post.status === 'POSTED' ? 'bg-green-100 text-green-700' :
-                  post.status === 'SCHEDULED' ? 'bg-blue-100 text-blue-700' :
-                  post.status === 'DRAFT' ? 'bg-gray-100 text-gray-700' : 'bg-red-100 text-red-700'
-                }`}>{post.status}</span>
-              </div>
-              <p className="text-sm text-gray-700 mb-3 line-clamp-3">{post.content}</p>
-              <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                <span>{post.type.replace(/_/g, ' ')}</span>
-                {post.postedAt && <span>{format(new Date(post.postedAt), 'MMM d, h:mm a')}</span>}
-              </div>
-              {post.status === 'POSTED' && (
-                <div className="flex gap-4 text-xs text-gray-500 border-t pt-3">
-                  <span>{post.likes} likes</span>
-                  <span>{post.comments} comments</span>
-                  <span>{post.shares} shares</span>
-                </div>
+        <div className="space-y-4">
+          {/* Search Bar */}
+          <SearchBar
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Search posts..."
+          />
+
+          {/* Toolbar: selection count, bulk delete, export */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={toggleSelectAll}
+                className={`btn btn-secondary text-sm flex items-center gap-2 ${selectedIds.size === posts.length && posts.length > 0 ? 'ring-2 ring-primary-300' : ''}`}
+              >
+                <CheckSquare className="h-4 w-4" />
+                {selectedIds.size === posts.length && posts.length > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedIds.size > 0 && (
+                <>
+                  <span className="text-sm text-gray-600">{selectedIds.size} selected</span>
+                  <button onClick={handleBulkDelete} className="btn btn-danger text-sm flex items-center gap-2">
+                    <Trash2 className="h-4 w-4" />
+                    Delete Selected
+                  </button>
+                </>
               )}
-              <div className="flex gap-2 mt-3">
-                {post.status === 'DRAFT' && (
-                  <button onClick={() => handlePublish(post)} className="btn btn-primary flex-1 text-sm"><Send className="h-4 w-4 mr-1" />Publish</button>
-                )}
-                <button onClick={() => openEditPost(post)} className="btn btn-secondary text-sm"><Edit2 className="h-4 w-4" /></button>
-                <button onClick={() => handleDelete(post.id)} className="btn btn-danger text-sm"><Trash2 className="h-4 w-4" /></button>
-              </div>
             </div>
-          ))}
-          {posts.length === 0 && (
-            <div className="col-span-full text-center py-12"><Share2 className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500">No posts yet</p></div>
-          )}
+            <div className="flex items-center gap-2">
+              <button onClick={handleExportCSV} className="btn btn-secondary text-sm flex items-center gap-2">
+                <Download className="h-4 w-4" />
+                CSV
+              </button>
+              <button onClick={handleExportPDF} className="btn btn-secondary text-sm flex items-center gap-2">
+                <FileDown className="h-4 w-4" />
+                PDF
+              </button>
+            </div>
+          </div>
+
+          {/* Post Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {posts.map(post => (
+              <div
+                key={post.id}
+                className={`card p-4 cursor-pointer transition-shadow hover:shadow-md ${selectedIds.has(post.id) ? 'ring-2 ring-primary-400' : ''}`}
+                onClick={() => handlePostCardClick(post)}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(post.id)}
+                      onChange={(e) => { e.stopPropagation(); toggleSelectId(post.id); }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-4 w-4 text-primary-600 rounded border-gray-300 focus:ring-primary-500"
+                    />
+                    {getPlatformIcon(post.platform)}
+                    <span className="text-sm font-medium">{post.platform}</span>
+                  </div>
+                  <span className={`px-2 py-0.5 text-xs rounded-full ${
+                    post.status === 'POSTED' ? 'bg-green-100 text-green-700' :
+                    post.status === 'SCHEDULED' ? 'bg-blue-100 text-blue-700' :
+                    post.status === 'DRAFT' ? 'bg-gray-100 text-gray-700' : 'bg-red-100 text-red-700'
+                  }`}>{post.status}</span>
+                </div>
+                <p className="text-sm text-gray-700 mb-3 line-clamp-3">{post.content}</p>
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+                  <span>{post.type.replace(/_/g, ' ')}</span>
+                  {post.postedAt && <span>{format(new Date(post.postedAt), 'MMM d, h:mm a')}</span>}
+                </div>
+                {post.status === 'POSTED' && (
+                  <div className="flex gap-4 text-xs text-gray-500 border-t pt-3">
+                    <span>{post.likes} likes</span>
+                    <span>{post.comments} comments</span>
+                    <span>{post.shares} shares</span>
+                  </div>
+                )}
+                <div className="flex gap-2 mt-3" onClick={(e) => e.stopPropagation()}>
+                  {post.status === 'DRAFT' && (
+                    <button onClick={() => handlePublish(post)} className="btn btn-primary flex-1 text-sm"><Send className="h-4 w-4 mr-1" />Publish</button>
+                  )}
+                  <button onClick={() => openEditPost(post)} className="btn btn-secondary text-sm"><Edit2 className="h-4 w-4" /></button>
+                  <button onClick={() => handleDelete(post.id)} className="btn btn-danger text-sm"><Trash2 className="h-4 w-4" /></button>
+                </div>
+              </div>
+            ))}
+            {posts.length === 0 && (
+              <div className="col-span-full text-center py-12"><Share2 className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500">No posts yet</p></div>
+            )}
+          </div>
+
+          {/* Pagination */}
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={(p) => { setPage(p); setSelectedIds(new Set()); }}
+          />
         </div>
       )}
 
@@ -391,6 +612,29 @@ export default function Social() {
           </div>
         </div>
       )}
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title="Post Details"
+        data={detailItem}
+        fields={postDetailFields}
+        onClose={() => { setShowDetail(false); setDetailItem(null); }}
+        onEdit={handleDetailEdit}
+        onDelete={handleDetailDelete}
+      />
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title="Confirm Action"
+        message="Are you sure you want to proceed? This action cannot be undone."
+        confirmLabel="Confirm"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 }

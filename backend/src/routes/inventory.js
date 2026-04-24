@@ -1,16 +1,20 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
 // ==================== INVENTORY ITEMS ====================
 
-// Get all inventory for a truck
+// Get all inventory for a truck (with pagination and search)
 router.get('/truck/:truckId', authenticate, async (req, res) => {
   try {
-    const { category, lowStock } = req.query;
+    const { category, lowStock, search } = req.query;
+    const { page, limit, skip } = getPaginationParams(req.query);
 
     const whereClause = { truckId: req.params.truckId };
 
@@ -18,16 +22,40 @@ router.get('/truck/:truckId', authenticate, async (req, res) => {
       whereClause.category = category;
     }
 
-    let items = await prisma.inventoryItem.findMany({
-      where: whereClause,
-      orderBy: { name: 'asc' }
-    });
-
-    if (lowStock === 'true') {
-      items = items.filter(i => i.quantity <= i.minQuantity);
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { supplier: { contains: search, mode: 'insensitive' } }
+      ];
     }
 
-    res.json(items);
+    // If lowStock filter is on, we need to fetch all matching items first
+    // since lowStock comparison requires both quantity and minQuantity fields
+    if (lowStock === 'true') {
+      let items = await prisma.inventoryItem.findMany({
+        where: whereClause,
+        orderBy: { name: 'asc' }
+      });
+
+      items = items.filter(i => i.quantity <= i.minQuantity);
+
+      const total = items.length;
+      const paginatedItems = items.slice(skip, skip + limit);
+
+      return res.json(paginatedResponse(paginatedItems, total, page, limit));
+    }
+
+    const [items, total] = await Promise.all([
+      prisma.inventoryItem.findMany({
+        where: whereClause,
+        orderBy: { name: 'asc' },
+        skip,
+        take: limit
+      }),
+      prisma.inventoryItem.count({ where: whereClause })
+    ]);
+
+    res.json(paginatedResponse(items, total, page, limit));
   } catch (error) {
     console.error('Get inventory error:', error);
     res.status(500).json({ error: 'Failed to get inventory' });
@@ -161,6 +189,51 @@ router.delete('/item/:id', authenticate, async (req, res) => {
   }
 });
 
+// Bulk delete inventory items
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+
+    const result = await prisma.inventoryItem.deleteMany({
+      where: { id: { in: ids } }
+    });
+
+    res.json({ message: `${result.count} items deleted successfully`, count: result.count });
+  } catch (error) {
+    console.error('Bulk delete error:', error);
+    res.status(500).json({ error: 'Failed to bulk delete items' });
+  }
+});
+
+// Bulk update inventory items
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'data object with at least one field is required' });
+    }
+
+    const result = await prisma.inventoryItem.updateMany({
+      where: { id: { in: ids } },
+      data
+    });
+
+    res.json({ message: `${result.count} items updated successfully`, count: result.count });
+  } catch (error) {
+    console.error('Bulk update error:', error);
+    res.status(500).json({ error: 'Failed to bulk update items' });
+  }
+});
+
 // Get low stock alerts
 router.get('/truck/:truckId/alerts', authenticate, async (req, res) => {
   try {
@@ -184,6 +257,60 @@ router.get('/truck/:truckId/alerts', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get alerts error:', error);
     res.status(500).json({ error: 'Failed to get alerts' });
+  }
+});
+
+// CSV export for inventory
+router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const items = await prisma.inventoryItem.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { name: 'asc' }
+    });
+
+    const fields = ['name', 'category', 'quantity', 'unit', 'minQuantity', 'costPerUnit', 'supplier'];
+
+    const data = items.map(item => ({
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      unit: item.unit,
+      minQuantity: item.minQuantity,
+      costPerUnit: item.costPerUnit,
+      supplier: item.supplier
+    }));
+
+    sendCSV(res, data, fields, 'inventory');
+  } catch (error) {
+    console.error('CSV export error:', error);
+    res.status(500).json({ error: 'Failed to export inventory as CSV' });
+  }
+});
+
+// PDF export for inventory
+router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const items = await prisma.inventoryItem.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { name: 'asc' }
+    });
+
+    const fields = ['name', 'category', 'quantity', 'unit', 'minQuantity', 'costPerUnit', 'supplier'];
+
+    const data = items.map(item => ({
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      unit: item.unit,
+      minQuantity: item.minQuantity,
+      costPerUnit: item.costPerUnit,
+      supplier: item.supplier
+    }));
+
+    sendPDF(res, data, fields, 'Inventory Report');
+  } catch (error) {
+    console.error('PDF export error:', error);
+    res.status(500).json({ error: 'Failed to export inventory as PDF' });
   }
 });
 

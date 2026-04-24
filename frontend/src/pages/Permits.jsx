@@ -1,11 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { permitsAPI } from '../services/api';
-import { FileText, Plus, Edit2, Trash2, X, AlertTriangle, RefreshCw, Check } from 'lucide-react';
+import { FileText, Plus, Edit2, Trash2, X, AlertTriangle, RefreshCw, Check, Download, FileDown, CheckSquare } from 'lucide-react';
 import { format, differenceInDays } from 'date-fns';
 import toast from 'react-hot-toast';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
 
 const permitTypes = ['HEALTH', 'BUSINESS', 'PARKING', 'FIRE', 'MOBILE_VENDOR', 'SPECIAL_EVENT'];
+
+const permitDetailFields = [
+  { key: 'permitNumber', label: 'Permit Number' },
+  { key: 'type', label: 'Type', render: (v) => v?.replace('_', ' ') },
+  { key: 'issuingAuthority', label: 'Issuing Authority' },
+  { key: 'issueDate', label: 'Issue Date', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'expiryDate', label: 'Expiry Date', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'cost', label: 'Cost', render: (v) => v ? `$${v.toFixed(2)}` : '-' },
+  { key: 'notes', label: 'Notes' }
+];
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 export default function Permits() {
   const { selectedTruck } = useTruck();
@@ -19,17 +44,39 @@ export default function Permits() {
   const [permitForm, setPermitForm] = useState({ permitNumber: '', type: 'HEALTH', issuingAuthority: '', issueDate: '', expiryDate: '', cost: '', notes: '' });
   const [renewForm, setRenewForm] = useState({ newExpiryDate: '', newCost: '', newPermitNumber: '' });
 
+  // New state for search, pagination, bulk ops, detail modal, confirm dialog
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
   useEffect(() => {
     if (selectedTruck) loadData();
-  }, [selectedTruck]);
+  }, [selectedTruck, page, search]);
+
+  // Reset page to 1 when search changes
+  const handleSearchChange = useCallback((value) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
 
   const loadData = async () => {
     try {
       const [permitsRes, alertsRes] = await Promise.all([
-        permitsAPI.getByTruck(selectedTruck.id),
+        permitsAPI.getByTruck(selectedTruck.id, { page, limit: 20, search }),
         permitsAPI.getAlerts(selectedTruck.id)
       ]);
-      setPermits(permitsRes.data);
+      setPermits(permitsRes.data.data || permitsRes.data);
+      if (permitsRes.data.pagination) {
+        setPage(permitsRes.data.pagination.page);
+        setTotalPages(permitsRes.data.pagination.totalPages);
+        setTotal(permitsRes.data.pagination.total);
+      }
       setAlerts(alertsRes.data);
     } catch (error) {
       console.error('Failed to load permits:', error);
@@ -57,13 +104,66 @@ export default function Permits() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this permit?')) return;
+    setConfirmAction(() => async () => {
+      try {
+        await permitsAPI.delete(id);
+        toast.success('Permit deleted');
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete permit');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmAction(() => async () => {
+      try {
+        await permitsAPI.bulkDelete([...selectedIds]);
+        toast.success(`${selectedIds.size} permit(s) deleted`);
+        setSelectedIds(new Set());
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete permits');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleConfirm = async () => {
+    setShowConfirm(false);
+    if (confirmAction) await confirmAction();
+    setConfirmAction(null);
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  const handleExportCSV = async () => {
     try {
-      await permitsAPI.delete(id);
-      toast.success('Permit deleted');
-      loadData();
+      const res = await permitsAPI.exportCSV(selectedTruck.id);
+      downloadBlob(res.data, `permits-${selectedTruck.name || 'export'}.csv`);
+      toast.success('CSV exported');
     } catch (error) {
-      toast.error('Failed to delete permit');
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const res = await permitsAPI.exportPDF(selectedTruck.id);
+      downloadBlob(res.data, `permits-${selectedTruck.name || 'export'}.pdf`);
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
     }
   };
 
@@ -102,6 +202,35 @@ export default function Permits() {
       newPermitNumber: permit.permitNumber
     });
     setShowRenewModal(true);
+  };
+
+  const toggleSelectId = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleRowClick = (permit) => {
+    setDetailItem(permit);
+    setShowDetail(true);
+  };
+
+  const handleDetailEdit = (permit) => {
+    setShowDetail(false);
+    setDetailItem(null);
+    openEditPermit(permit);
+  };
+
+  const handleDetailDelete = (permit) => {
+    setShowDetail(false);
+    setDetailItem(null);
+    handleDelete(permit.id);
   };
 
   const getStatusBadge = (permit) => {
@@ -145,20 +274,68 @@ export default function Permits() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="card p-4"><p className="text-sm text-gray-500">Total Permits</p><p className="text-2xl font-bold">{permits.length}</p></div>
+        <div className="card p-4"><p className="text-sm text-gray-500">Total Permits</p><p className="text-2xl font-bold">{total || permits.length}</p></div>
         <div className="card p-4"><p className="text-sm text-gray-500">Active</p><p className="text-2xl font-bold text-green-600">{alerts.active?.length || 0}</p></div>
         <div className="card p-4"><p className="text-sm text-gray-500">Expiring Soon</p><p className="text-2xl font-bold text-yellow-600">{alerts.expiringSoon?.length || 0}</p></div>
         <div className="card p-4"><p className="text-sm text-gray-500">Expired</p><p className="text-2xl font-bold text-red-600">{alerts.expired?.length || 0}</p></div>
+      </div>
+
+      {/* Search Bar */}
+      <SearchBar
+        value={search}
+        onChange={handleSearchChange}
+        placeholder="Search permits by number, type, or authority..."
+      />
+
+      {/* Toolbar: bulk actions + export */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-3">
+          {selectedIds.size > 0 && (
+            <>
+              <span className="text-sm text-gray-600 flex items-center gap-1">
+                <CheckSquare className="h-4 w-4 text-primary-600" />
+                {selectedIds.size} selected
+              </span>
+              <button onClick={handleBulkDelete} className="btn btn-danger text-sm flex items-center gap-1">
+                <Trash2 className="h-4 w-4" />
+                Delete Selected
+              </button>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handleExportCSV} className="btn btn-secondary text-sm flex items-center gap-1">
+            <Download className="h-4 w-4" />
+            CSV
+          </button>
+          <button onClick={handleExportPDF} className="btn btn-secondary text-sm flex items-center gap-1">
+            <FileDown className="h-4 w-4" />
+            PDF
+          </button>
+        </div>
       </div>
 
       {/* Permits List */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {permits.map(permit => {
           const daysUntilExpiry = differenceInDays(new Date(permit.expiryDate), new Date());
+          const isSelected = selectedIds.has(permit.id);
           return (
-            <div key={permit.id} className={`card p-4 ${daysUntilExpiry < 0 ? 'border-red-200 bg-red-50' : daysUntilExpiry <= 30 ? 'border-yellow-200 bg-yellow-50' : ''}`}>
+            <div
+              key={permit.id}
+              onClick={() => handleRowClick(permit)}
+              className={`card p-4 cursor-pointer transition-shadow hover:shadow-md ${daysUntilExpiry < 0 ? 'border-red-200 bg-red-50' : daysUntilExpiry <= 30 ? 'border-yellow-200 bg-yellow-50' : ''} ${isSelected ? 'ring-2 ring-primary-500' : ''}`}
+            >
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
+                  {/* Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelectId(permit.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
                   <div className="h-10 w-10 bg-primary-100 rounded-lg flex items-center justify-center"><FileText className="h-5 w-5 text-primary-600" /></div>
                   <div><h3 className="font-semibold">{permit.type.replace('_', ' ')}</h3><p className="text-xs text-gray-500">{permit.permitNumber}</p></div>
                 </div>
@@ -173,7 +350,7 @@ export default function Permits() {
                 </p>
                 {permit.cost && <p>Cost: ${permit.cost.toFixed(2)}</p>}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => openRenewPermit(permit)} className="btn btn-primary flex-1 text-sm"><RefreshCw className="h-4 w-4 mr-1" />Renew</button>
                 <button onClick={() => openEditPermit(permit)} className="btn btn-secondary text-sm"><Edit2 className="h-4 w-4" /></button>
                 <button onClick={() => handleDelete(permit.id)} className="btn btn-danger text-sm"><Trash2 className="h-4 w-4" /></button>
@@ -185,6 +362,37 @@ export default function Permits() {
           <div className="col-span-full text-center py-12"><FileText className="h-12 w-12 text-gray-300 mx-auto mb-3" /><p className="text-gray-500">No permits added yet</p></div>
         )}
       </div>
+
+      {/* Pagination */}
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        onPageChange={setPage}
+      />
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title="Permit Details"
+        data={detailItem}
+        fields={permitDetailFields}
+        onClose={() => { setShowDetail(false); setDetailItem(null); }}
+        onEdit={handleDetailEdit}
+        onDelete={handleDetailDelete}
+      />
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title="Confirm Delete"
+        message="Are you sure you want to delete? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
 
       {/* Permit Modal */}
       {showPermitModal && (

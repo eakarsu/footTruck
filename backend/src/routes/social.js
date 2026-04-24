@@ -1,35 +1,39 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all posts for a truck
+// Get all posts for a truck (with pagination and search)
 router.get('/truck/:truckId', authenticate, async (req, res) => {
   try {
     const { platform, status, type } = req.query;
+    const { page, limit, skip, search } = getPaginationParams(req.query);
 
     const whereClause = { truckId: req.params.truckId };
+    if (platform) whereClause.platform = platform;
+    if (status) whereClause.status = status;
+    if (type) whereClause.type = type;
 
-    if (platform) {
-      whereClause.platform = platform;
+    if (search) {
+      whereClause.content = { contains: search, mode: 'insensitive' };
     }
 
-    if (status) {
-      whereClause.status = status;
-    }
+    const [posts, total] = await Promise.all([
+      prisma.socialPost.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.socialPost.count({ where: whereClause })
+    ]);
 
-    if (type) {
-      whereClause.type = type;
-    }
-
-    const posts = await prisma.socialPost.findMany({
-      where: whereClause,
-      orderBy: { createdAt: 'desc' }
-    });
-
-    res.json(posts);
+    res.json(paginatedResponse(posts, total, page, limit));
   } catch (error) {
     console.error('Get posts error:', error);
     res.status(500).json({ error: 'Failed to get posts' });
@@ -299,6 +303,65 @@ router.post('/truck/:truckId/menu-post', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Create menu post error:', error);
     res.status(500).json({ error: 'Failed to create menu post' });
+  }
+});
+
+// ==================== BULK OPERATIONS & EXPORTS ====================
+
+// Bulk delete posts
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.socialPost.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} posts deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk delete posts' });
+  }
+});
+
+// Bulk update posts
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.socialPost.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} posts updated successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk update posts' });
+  }
+});
+
+// Export posts as CSV
+router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const posts = await prisma.socialPost.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { createdAt: 'desc' }
+    });
+    const data = posts.map(p => ({
+      platform: p.platform, content: p.content.substring(0, 100), status: p.status,
+      type: p.type, likes: p.likes, comments: p.comments, shares: p.shares,
+      reach: p.reach, postedAt: p.postedAt ? p.postedAt.toISOString() : '', createdAt: p.createdAt.toISOString()
+    }));
+    sendCSV(res, data, ['platform', 'content', 'status', 'type', 'likes', 'comments', 'shares', 'reach', 'postedAt', 'createdAt'], 'social-posts-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export posts' });
+  }
+});
+
+// Export posts as PDF
+router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const posts = await prisma.socialPost.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { createdAt: 'desc' }
+    });
+    const columns = ['Platform', 'Status', 'Type', 'Likes', 'Comments', 'Shares', 'Date'];
+    const rows = posts.map(p => [p.platform, p.status, p.type, p.likes, p.comments, p.shares, p.createdAt.toLocaleDateString()]);
+    sendPDF(res, 'Social Media Posts Report', columns, rows, 'social-posts-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export posts' });
   }
 });
 

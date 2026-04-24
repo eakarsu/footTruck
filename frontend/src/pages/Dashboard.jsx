@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTruck } from '../context/TruckContext';
 import { dashboardAPI, ordersAPI } from '../services/api';
 import {
@@ -19,6 +19,7 @@ import LocationBroadcaster from '../components/LocationBroadcaster';
 
 export default function Dashboard() {
   const { selectedTruck } = useTruck();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
 
@@ -60,9 +61,9 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Quick Stats */}
+      {/* Quick Stats - Clickable cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="card p-6">
+        <div className="card p-6 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/financial')}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Today's Sales</p>
@@ -83,7 +84,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card p-6">
+        <div className="card p-6 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/orders')}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Today's Orders</p>
@@ -102,7 +103,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="card p-6">
+        <div className="card p-6 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/inventory')}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Low Stock Items</p>
@@ -114,12 +115,12 @@ export default function Dashboard() {
               <Package className="h-6 w-6 text-yellow-600" />
             </div>
           </div>
-          <Link to="/inventory" className="mt-4 flex items-center text-sm text-primary-600 hover:text-primary-700">
+          <span className="mt-4 flex items-center text-sm text-primary-600 hover:text-primary-700">
             View inventory
-          </Link>
+          </span>
         </div>
 
-        <div className="card p-6">
+        <div className="card p-6 cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate('/permits')}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Expiring Permits</p>
@@ -131,9 +132,9 @@ export default function Dashboard() {
               <FileText className="h-6 w-6 text-red-600" />
             </div>
           </div>
-          <Link to="/permits" className="mt-4 flex items-center text-sm text-primary-600 hover:text-primary-700">
+          <span className="mt-4 flex items-center text-sm text-primary-600 hover:text-primary-700">
             View permits
-          </Link>
+          </span>
         </div>
       </div>
 

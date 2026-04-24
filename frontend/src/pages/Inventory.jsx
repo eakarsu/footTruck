@@ -1,11 +1,37 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { inventoryAPI } from '../services/api';
-import { Package, Plus, Edit2, Trash2, X, AlertTriangle, TrendingDown, Clipboard } from 'lucide-react';
+import { Package, Plus, Edit2, Trash2, X, AlertTriangle, TrendingDown, Clipboard, Download, FileDown, CheckSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
 
 const categories = ['MEAT', 'PRODUCE', 'DAIRY', 'DRY_GOODS', 'BEVERAGES', 'CONDIMENTS', 'PACKAGING', 'CLEANING', 'OTHER'];
+
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob.data || blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const detailFields = [
+  { key: 'name', label: 'Name' },
+  { key: 'category', label: 'Category', render: (v) => v?.replace('_', ' ') },
+  { key: 'quantity', label: 'Quantity' },
+  { key: 'unit', label: 'Unit' },
+  { key: 'minQuantity', label: 'Min Quantity' },
+  { key: 'maxQuantity', label: 'Max Quantity' },
+  { key: 'costPerUnit', label: 'Cost/Unit', render: (v) => v != null ? `$${Number(v).toFixed(2)}` : '-' },
+  { key: 'supplier', label: 'Supplier' },
+  { key: 'expiryDate', label: 'Expiry Date', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'notes', label: 'Notes' },
+];
 
 export default function Inventory() {
   const { selectedTruck } = useTruck();
@@ -22,6 +48,19 @@ export default function Inventory() {
   const [editingItem, setEditingItem] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
 
+  // New state for search, pagination, bulk selection, detail modal, confirm dialog
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmTitle, setConfirmTitle] = useState('');
+  const [confirmMessage, setConfirmMessage] = useState('');
+
   const [itemForm, setItemForm] = useState({
     name: '', category: 'OTHER', quantity: '', unit: '', minQuantity: '', maxQuantity: '', costPerUnit: '', supplier: '', expiryDate: '', notes: ''
   });
@@ -33,15 +72,50 @@ export default function Inventory() {
     if (selectedTruck) loadData();
   }, [selectedTruck]);
 
+  // Reload inventory when search or page changes
+  useEffect(() => {
+    if (selectedTruck) loadInventory();
+  }, [search, page]);
+
+  // Reset page to 1 when search changes
+  const handleSearchChange = useCallback((value) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
+
+  const loadInventory = async () => {
+    try {
+      const itemsRes = await inventoryAPI.getByTruck(selectedTruck.id, { page, limit: 20, search });
+      if (itemsRes.data?.pagination) {
+        setItems(itemsRes.data.data || itemsRes.data);
+        setTotalPages(itemsRes.data.pagination.totalPages || 1);
+        setTotal(itemsRes.data.pagination.total || 0);
+      } else {
+        // Fallback if API doesn't return pagination structure
+        const data = Array.isArray(itemsRes.data) ? itemsRes.data : (itemsRes.data?.data || []);
+        setItems(data);
+      }
+    } catch (error) {
+      console.error('Failed to load inventory:', error);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [itemsRes, alertsRes, prepRes, supplyRes] = await Promise.all([
-        inventoryAPI.getByTruck(selectedTruck.id),
+        inventoryAPI.getByTruck(selectedTruck.id, { page, limit: 20, search }),
         inventoryAPI.getAlerts(selectedTruck.id),
         inventoryAPI.getPrepLists(selectedTruck.id),
         inventoryAPI.getSupplies(selectedTruck.id)
       ]);
-      setItems(itemsRes.data);
+      if (itemsRes.data?.pagination) {
+        setItems(itemsRes.data.data || itemsRes.data);
+        setTotalPages(itemsRes.data.pagination.totalPages || 1);
+        setTotal(itemsRes.data.pagination.total || 0);
+      } else {
+        const data = Array.isArray(itemsRes.data) ? itemsRes.data : (itemsRes.data?.data || []);
+        setItems(data);
+      }
       setAlerts(alertsRes.data);
       setPrepLists(prepRes.data);
       setSupplies(supplyRes.data);
@@ -71,14 +145,31 @@ export default function Inventory() {
   };
 
   const handleDeleteItem = async (id) => {
-    if (!confirm('Delete this inventory item?')) return;
-    try {
-      await inventoryAPI.delete(id);
-      toast.success('Item deleted');
-      loadData();
-    } catch (error) {
-      toast.error('Failed to delete item');
+    setConfirmTitle('Delete Item');
+    setConfirmMessage('Are you sure you want to delete this inventory item? This action cannot be undone.');
+    setConfirmAction(() => async () => {
+      try {
+        await inventoryAPI.delete(id);
+        toast.success('Item deleted');
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete item');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleConfirm = async () => {
+    if (confirmAction) {
+      await confirmAction();
     }
+    setShowConfirm(false);
+    setConfirmAction(null);
   };
 
   const handleAdjustQuantity = async (item, adjustment) => {
@@ -154,9 +245,91 @@ export default function Inventory() {
     setPrepForm({ ...prepForm, items: [...prepForm.items, { name: '', quantity: '', unit: '' }] });
   };
 
+  // Bulk selection handlers
+  const handleSelectAll = (e) => {
+    if (e.target.checked) {
+      setSelectedIds(new Set(items.map((item) => item.id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleSelectRow = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Bulk delete handler
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmTitle('Bulk Delete');
+    setConfirmMessage(`Are you sure you want to delete ${selectedIds.size} selected item${selectedIds.size > 1 ? 's' : ''}? This action cannot be undone.`);
+    setConfirmAction(() => async () => {
+      try {
+        await inventoryAPI.bulkDelete([...selectedIds]);
+        toast.success(`${selectedIds.size} item${selectedIds.size > 1 ? 's' : ''} deleted`);
+        setSelectedIds(new Set());
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete items');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  // Export handlers
+  const handleExportCSV = async () => {
+    try {
+      const res = await inventoryAPI.exportCSV(selectedTruck.id);
+      downloadBlob(res, 'inventory.csv');
+      toast.success('CSV exported');
+    } catch (error) {
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const res = await inventoryAPI.exportPDF(selectedTruck.id);
+      downloadBlob(res, 'inventory.pdf');
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
+    }
+  };
+
+  // Row click handler for detail modal
+  const handleRowClick = (item, e) => {
+    // Don't open detail modal if clicking on action buttons, checkboxes, or adjust buttons
+    if (e.target.closest('button') || e.target.closest('input[type="checkbox"]')) return;
+    setDetailItem(item);
+    setShowDetail(true);
+  };
+
+  // Handlers for RowDetailModal
+  const handleDetailEdit = (item) => {
+    setShowDetail(false);
+    openEditItem(item);
+  };
+
+  const handleDetailDelete = (item) => {
+    setShowDetail(false);
+    handleDeleteItem(item.id);
+  };
+
   if (loading) {
     return <div className="flex items-center justify-center h-64"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div></div>;
   }
+
+  const allSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id));
+  const someSelected = items.some((item) => selectedIds.has(item.id)) && !allSelected;
 
   return (
     <div className="space-y-6">
@@ -201,46 +374,102 @@ export default function Inventory() {
 
       {/* Inventory Tab */}
       {activeTab === 'inventory' && (
-        <div className="card overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Item</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Category</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Quantity</th>
-                <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Status</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-500">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {items.map(item => (
-                <tr key={item.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3"><span className="font-medium">{item.name}</span></td>
-                  <td className="px-4 py-3"><span className="text-sm text-gray-500">{item.category.replace('_', ' ')}</span></td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => handleAdjustQuantity(item, -1)} className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200">-</button>
-                      <span className="w-16 text-center">{item.quantity} {item.unit}</span>
-                      <button onClick={() => handleAdjustQuantity(item, 1)} className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200">+</button>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    {item.quantity <= item.minQuantity ? (
-                      <span className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded-full">Low Stock</span>
-                    ) : (
-                      <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">In Stock</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button onClick={() => { setSelectedItem(item); setWasteForm({ quantity: '', unit: item.unit, reason: 'SPOILED', cost: '', notes: '' }); setShowWasteModal(true); }} className="p-1.5 hover:bg-gray-100 rounded" title="Record Waste"><TrendingDown className="h-4 w-4 text-orange-500" /></button>
-                    <button onClick={() => openEditItem(item)} className="p-1.5 hover:bg-gray-100 rounded"><Edit2 className="h-4 w-4 text-gray-500" /></button>
-                    <button onClick={() => handleDeleteItem(item.id)} className="p-1.5 hover:bg-gray-100 rounded"><Trash2 className="h-4 w-4 text-red-500" /></button>
-                  </td>
+        <div className="space-y-4">
+          {/* Search Bar */}
+          <SearchBar value={search} onChange={handleSearchChange} placeholder="Search inventory..." />
+
+          {/* Toolbar */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 p-3 bg-primary-50 border border-primary-200 rounded-lg">
+              <CheckSquare className="h-5 w-5 text-primary-600" />
+              <span className="text-sm font-medium text-primary-700">{selectedIds.size} item{selectedIds.size > 1 ? 's' : ''} selected</span>
+              <div className="flex gap-2 ml-auto">
+                <button onClick={handleBulkDelete} className="btn btn-secondary text-red-600 border-red-300 hover:bg-red-50 text-sm px-3 py-1.5">
+                  <Trash2 className="h-4 w-4 mr-1" />Delete
+                </button>
+                <button onClick={handleExportCSV} className="btn btn-secondary text-sm px-3 py-1.5">
+                  <Download className="h-4 w-4 mr-1" />CSV
+                </button>
+                <button onClick={handleExportPDF} className="btn btn-secondary text-sm px-3 py-1.5">
+                  <FileDown className="h-4 w-4 mr-1" />PDF
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Export buttons when nothing selected */}
+          {selectedIds.size === 0 && (
+            <div className="flex justify-end gap-2">
+              <button onClick={handleExportCSV} className="btn btn-secondary text-sm px-3 py-1.5">
+                <Download className="h-4 w-4 mr-1" />Export CSV
+              </button>
+              <button onClick={handleExportPDF} className="btn btn-secondary text-sm px-3 py-1.5">
+                <FileDown className="h-4 w-4 mr-1" />Export PDF
+              </button>
+            </div>
+          )}
+
+          <div className="card overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                      onChange={handleSelectAll}
+                      className="rounded border-gray-300"
+                    />
+                  </th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Item</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Category</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Quantity</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500">Status</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-500">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {items.length === 0 && <div className="p-8 text-center text-gray-500">No inventory items</div>}
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {items.map(item => (
+                  <tr key={item.id} className="hover:bg-gray-50 cursor-pointer" onClick={(e) => handleRowClick(item, e)}>
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={() => handleSelectRow(item.id)}
+                        className="rounded border-gray-300"
+                      />
+                    </td>
+                    <td className="px-4 py-3"><span className="font-medium">{item.name}</span></td>
+                    <td className="px-4 py-3"><span className="text-sm text-gray-500">{item.category.replace('_', ' ')}</span></td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => handleAdjustQuantity(item, -1)} className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200">-</button>
+                        <span className="w-16 text-center">{item.quantity} {item.unit}</span>
+                        <button onClick={() => handleAdjustQuantity(item, 1)} className="w-6 h-6 rounded bg-gray-100 hover:bg-gray-200">+</button>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {item.quantity <= item.minQuantity ? (
+                        <span className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded-full">Low Stock</span>
+                      ) : (
+                        <span className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-full">In Stock</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button onClick={() => { setSelectedItem(item); setWasteForm({ quantity: '', unit: item.unit, reason: 'SPOILED', cost: '', notes: '' }); setShowWasteModal(true); }} className="p-1.5 hover:bg-gray-100 rounded" title="Record Waste"><TrendingDown className="h-4 w-4 text-orange-500" /></button>
+                      <button onClick={() => openEditItem(item)} className="p-1.5 hover:bg-gray-100 rounded"><Edit2 className="h-4 w-4 text-gray-500" /></button>
+                      <button onClick={() => handleDeleteItem(item.id)} className="p-1.5 hover:bg-gray-100 rounded"><Trash2 className="h-4 w-4 text-red-500" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {items.length === 0 && <div className="p-8 text-center text-gray-500">No inventory items</div>}
+          </div>
+
+          {/* Pagination */}
+          <Pagination page={page} totalPages={totalPages} total={total} onPageChange={setPage} />
         </div>
       )}
 
@@ -382,6 +611,28 @@ export default function Inventory() {
           </div>
         </div>
       )}
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title={confirmTitle}
+        message={confirmMessage}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={handleConfirm}
+        onCancel={() => { setShowConfirm(false); setConfirmAction(null); }}
+      />
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title="Item Details"
+        data={detailItem}
+        fields={detailFields}
+        onClose={() => { setShowDetail(false); setDetailItem(null); }}
+        onEdit={handleDetailEdit}
+        onDelete={handleDetailDelete}
+      />
     </div>
   );
 }

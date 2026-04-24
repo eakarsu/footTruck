@@ -1,12 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { ordersAPI, menusAPI } from '../services/api';
 import {
   ShoppingCart, Plus, X, Clock, Check, ChefHat, Package,
-  DollarSign, User, Phone, Mail, AlertCircle, Settings, Calendar, ExternalLink
+  DollarSign, User, Phone, Mail, AlertCircle, Settings, Calendar, ExternalLink,
+  Download, FileDown, CheckSquare
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
 
 const statusColors = {
   PENDING: 'bg-yellow-100 text-yellow-800',
@@ -24,6 +29,29 @@ const statusIcons = {
   READY: Package,
   PICKED_UP: Check,
   CANCELLED: X
+};
+
+const orderDetailFields = [
+  { key: 'orderNumber', label: 'Order Number' },
+  { key: 'status', label: 'Status' },
+  { key: 'type', label: 'Type' },
+  { key: 'customerName', label: 'Customer' },
+  { key: 'customerPhone', label: 'Phone' },
+  { key: 'customerEmail', label: 'Email' },
+  { key: 'total', label: 'Total', render: (v) => v ? `$${v.toFixed(2)}` : '-' },
+  { key: 'paymentMethod', label: 'Payment Method' },
+  { key: 'paymentStatus', label: 'Payment Status' },
+  { key: 'notes', label: 'Notes' },
+  { key: 'createdAt', label: 'Created', render: (v) => v ? format(new Date(v), 'MMM d, yyyy h:mm a') : '-' }
+];
+
+const downloadBlob = (blob, filename) => {
+  const url = URL.createObjectURL(blob.data || blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 };
 
 export default function Orders() {
@@ -48,6 +76,17 @@ export default function Orders() {
   const [preOrderSettings, setPreOrderSettings] = useState(null);
   const [preOrderWindows, setPreOrderWindows] = useState([]);
 
+  // New state for search, pagination, bulk operations, detail modal, confirm dialog
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
   useEffect(() => {
     if (selectedTruck) {
       loadData();
@@ -56,19 +95,50 @@ export default function Orders() {
     }
   }, [selectedTruck]);
 
+  // Reload orders when search or page changes
+  useEffect(() => {
+    if (selectedTruck) {
+      loadOrders();
+    }
+  }, [search, page, selectedTruck]);
+
+  // Reset page to 1 when search changes
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  const loadOrders = async () => {
+    try {
+      const ordersRes = await ordersAPI.getByTruck(selectedTruck.id, { page, limit: 20, search });
+      setOrders(ordersRes.data.data || ordersRes.data);
+      if (ordersRes.data.pagination) {
+        setPage(ordersRes.data.pagination.page);
+        setTotalPages(ordersRes.data.pagination.totalPages);
+        setTotal(ordersRes.data.pagination.total);
+      }
+    } catch (error) {
+      console.error('Failed to load orders:', error);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [queueRes, statsRes, ordersRes, itemsRes, settingsRes, windowsRes] = await Promise.all([
         ordersAPI.getQueue(selectedTruck.id),
         ordersAPI.getStats(selectedTruck.id),
-        ordersAPI.getByTruck(selectedTruck.id),
+        ordersAPI.getByTruck(selectedTruck.id, { page, limit: 20, search }),
         menusAPI.getItems(selectedTruck.id),
         ordersAPI.getPreOrderSettings(selectedTruck.id).catch(() => ({ data: null })),
         ordersAPI.getPreOrderSlots(selectedTruck.id).catch(() => ({ data: [] }))
       ]);
       setQueue(queueRes.data);
       setStats(statsRes.data);
-      setOrders(ordersRes.data);
+      setOrders(ordersRes.data.data || ordersRes.data);
+      if (ordersRes.data.pagination) {
+        setPage(ordersRes.data.pagination.page);
+        setTotalPages(ordersRes.data.pagination.totalPages);
+        setTotal(ordersRes.data.pagination.total);
+      }
       setMenuItems(itemsRes.data);
       setPreOrderSettings(settingsRes.data);
       setPreOrderWindows(windowsRes.data || []);
@@ -131,14 +201,16 @@ export default function Orders() {
   };
 
   const handleCancelOrder = async (orderId) => {
-    if (!confirm('Are you sure you want to cancel this order?')) return;
-    try {
-      await ordersAPI.cancel(orderId);
-      toast.success('Order cancelled');
-      loadData();
-    } catch (error) {
-      toast.error('Failed to cancel order');
-    }
+    setConfirmAction(() => async () => {
+      try {
+        await ordersAPI.cancel(orderId);
+        toast.success('Order cancelled');
+        loadData();
+      } catch (error) {
+        toast.error('Failed to cancel order');
+      }
+    });
+    setShowConfirm(true);
   };
 
   const handlePayment = async (orderId) => {
@@ -195,24 +267,114 @@ export default function Orders() {
     return flow[currentStatus];
   };
 
-  const renderOrderCard = (order, showActions = true) => {
+  // Bulk operations
+  const toggleSelectOrder = (orderId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(orderId)) {
+        next.delete(orderId);
+      } else {
+        next.add(orderId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === orders.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(orders.map(o => o.id)));
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    setConfirmAction(() => async () => {
+      try {
+        await ordersAPI.bulkDelete(Array.from(selectedIds));
+        toast.success(`${selectedIds.size} order(s) deleted`);
+        setSelectedIds(new Set());
+        loadData();
+      } catch (error) {
+        toast.error('Failed to delete orders');
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  const handleExportCSV = async () => {
+    try {
+      const res = await ordersAPI.exportCSV(selectedTruck.id);
+      downloadBlob(res, 'orders.csv');
+      toast.success('CSV exported');
+    } catch (error) {
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const res = await ordersAPI.exportPDF(selectedTruck.id);
+      downloadBlob(res, 'orders.pdf');
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
+    }
+  };
+
+  const handleOrderCardClick = (order, e) => {
+    // Don't open detail if clicking on a button or checkbox
+    if (e.target.closest('button') || e.target.closest('input[type="checkbox"]')) return;
+    setDetailItem(order);
+    setShowDetail(true);
+  };
+
+  const handleConfirm = async () => {
+    if (confirmAction) {
+      await confirmAction();
+    }
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  const renderOrderCard = (order, showActions = true, showCheckbox = false) => {
     const StatusIcon = statusIcons[order.status] || Clock;
     const nextStatus = getNextStatus(order.status);
 
     return (
-      <div key={order.id} className="card p-4">
+      <div
+        key={order.id}
+        className="card p-4 cursor-pointer hover:shadow-md transition-shadow"
+        onClick={(e) => handleOrderCardClick(order, e)}
+      >
         <div className="flex items-start justify-between mb-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-lg">#{order.orderNumber}</span>
-              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[order.status]}`}>
-                {order.status.replace('_', ' ')}
-              </span>
+          <div className="flex items-start gap-2">
+            {showCheckbox && (
+              <input
+                type="checkbox"
+                checked={selectedIds.has(order.id)}
+                onChange={() => toggleSelectOrder(order.id)}
+                className="mt-1.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+            )}
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-lg">#{order.orderNumber}</span>
+                <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${statusColors[order.status]}`}>
+                  {order.status.replace('_', ' ')}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500">
+                {format(new Date(order.createdAt), 'h:mm a')}
+                {order.customerName && ` - ${order.customerName}`}
+              </p>
             </div>
-            <p className="text-sm text-gray-500">
-              {format(new Date(order.createdAt), 'h:mm a')}
-              {order.customerName && ` - ${order.customerName}`}
-            </p>
           </div>
           <div className="text-right">
             <p className="font-bold text-lg">${order.total.toFixed(2)}</p>
@@ -362,14 +524,79 @@ export default function Orders() {
 
       {/* All Orders */}
       {activeTab === 'all' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {orders.map(order => renderOrderCard(order, order.status !== 'PICKED_UP' && order.status !== 'CANCELLED'))}
-          {orders.length === 0 && (
-            <div className="col-span-full text-center py-12">
-              <ShoppingCart className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500">No orders yet</p>
+        <div className="space-y-4">
+          {/* Search Bar */}
+          <SearchBar
+            value={search}
+            onChange={setSearch}
+            placeholder="Search orders by number, customer name, status..."
+          />
+
+          {/* Toolbar */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={toggleSelectAll}
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+              >
+                <CheckSquare className="h-4 w-4" />
+                {selectedIds.size === orders.length && orders.length > 0 ? 'Deselect All' : 'Select All'}
+              </button>
+              {selectedIds.size > 0 && (
+                <>
+                  <span className="text-sm text-gray-600">
+                    {selectedIds.size} selected
+                  </span>
+                  <button
+                    onClick={handleBulkDelete}
+                    className="btn btn-danger flex items-center gap-2 text-sm"
+                  >
+                    <X className="h-4 w-4" />
+                    Delete Selected
+                  </button>
+                </>
+              )}
             </div>
-          )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportCSV}
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+              >
+                <Download className="h-4 w-4" />
+                CSV
+              </button>
+              <button
+                onClick={handleExportPDF}
+                className="btn btn-secondary flex items-center gap-2 text-sm"
+              >
+                <FileDown className="h-4 w-4" />
+                PDF
+              </button>
+            </div>
+          </div>
+
+          {/* Order Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {orders.map(order => renderOrderCard(
+              order,
+              order.status !== 'PICKED_UP' && order.status !== 'CANCELLED',
+              true
+            ))}
+            {orders.length === 0 && (
+              <div className="col-span-full text-center py-12">
+                <ShoppingCart className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500">No orders found</p>
+              </div>
+            )}
+          </div>
+
+          {/* Pagination */}
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={setPage}
+          />
         </div>
       )}
 
@@ -679,6 +906,30 @@ export default function Orders() {
           </div>
         </div>
       )}
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title={detailItem ? `Order #${detailItem.orderNumber}` : 'Order Details'}
+        data={detailItem}
+        fields={orderDetailFields}
+        onClose={() => {
+          setShowDetail(false);
+          setDetailItem(null);
+        }}
+      />
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title="Confirm Action"
+        message="Are you sure you want to proceed? This action cannot be undone."
+        confirmLabel="Confirm"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 }

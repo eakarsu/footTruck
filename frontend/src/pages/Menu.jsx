@@ -3,9 +3,38 @@ import { useTruck } from '../context/TruckContext';
 import { menusAPI } from '../services/api';
 import {
   UtensilsCrossed, Plus, Edit2, Trash2, X, Star, DollarSign,
-  AlertCircle, Clock, Tag, ChevronDown, ChevronRight
+  AlertCircle, Clock, Tag, ChevronDown, ChevronRight,
+  Download, FileDown, CheckSquare
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import SearchBar from '../components/SearchBar';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
+
+const itemDetailFields = [
+  { key: 'name', label: 'Name' },
+  { key: 'description', label: 'Description' },
+  { key: 'price', label: 'Price', render: (v) => v ? `$${v.toFixed(2)}` : '-' },
+  { key: 'specialPrice', label: 'Special Price', render: (v) => v ? `$${v.toFixed(2)}` : '-' },
+  { key: 'calories', label: 'Calories' },
+  { key: 'prepTime', label: 'Prep Time', render: (v) => v ? `${v} min` : '-' },
+  { key: 'allergens', label: 'Allergens', render: (v) => v?.length ? v.join(', ') : 'None' },
+  { key: 'tags', label: 'Tags', render: (v) => v?.length ? v.join(', ') : 'None' },
+  { key: 'isAvailable', label: 'Available', render: (v) => v ? 'Yes' : 'No' },
+  { key: 'isSoldOut', label: 'Sold Out', render: (v) => v ? 'Yes' : 'No' },
+  { key: 'isSpecial', label: 'Daily Special', render: (v) => v ? 'Yes' : 'No' }
+];
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 export default function Menu() {
   const { selectedTruck } = useTruck();
@@ -21,6 +50,14 @@ export default function Menu() {
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [expandedCategories, setExpandedCategories] = useState({});
 
+  // New state for search, bulk operations, detail modal, and confirm dialog
+  const [search, setSearch] = useState('');
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
   const [menuForm, setMenuForm] = useState({ name: '', description: '', isActive: true, isDefault: false });
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '', sortOrder: 0 });
   const [itemForm, setItemForm] = useState({
@@ -32,11 +69,11 @@ export default function Menu() {
     if (selectedTruck) {
       loadMenus();
     }
-  }, [selectedTruck]);
+  }, [selectedTruck, search]);
 
   const loadMenus = async () => {
     try {
-      const res = await menusAPI.getByTruck(selectedTruck.id);
+      const res = await menusAPI.getByTruck(selectedTruck.id, { search });
       setMenus(res.data);
       if (res.data.length > 0 && !selectedMenu) {
         setSelectedMenu(res.data[0]);
@@ -48,6 +85,99 @@ export default function Menu() {
     }
   };
 
+  // --- Confirm dialog helpers ---
+  const openConfirm = (title, message, onConfirm, variant = 'danger', confirmLabel = 'Delete') => {
+    setConfirmAction({ title, message, onConfirm, variant, confirmLabel });
+    setShowConfirm(true);
+  };
+
+  const handleConfirm = () => {
+    if (confirmAction?.onConfirm) {
+      confirmAction.onConfirm();
+    }
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  // --- Selection helpers ---
+  const toggleSelectItem = (itemId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  const getAllItemIds = () => {
+    const ids = [];
+    const currentMenu = menus.find(m => m.id === selectedMenu?.id) || selectedMenu;
+    currentMenu?.categories?.forEach(cat => {
+      cat.items?.forEach(item => ids.push(item.id));
+    });
+    return ids;
+  };
+
+  const toggleSelectAll = () => {
+    const allIds = getAllItemIds();
+    if (selectedIds.size === allIds.length && allIds.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allIds));
+    }
+  };
+
+  // --- Bulk operations ---
+  const handleBulkDelete = () => {
+    if (selectedIds.size === 0) return;
+    openConfirm(
+      'Delete Selected Items',
+      `Are you sure you want to delete ${selectedIds.size} selected item(s)? This action cannot be undone.`,
+      async () => {
+        try {
+          await menusAPI.bulkDeleteItems([...selectedIds]);
+          toast.success(`${selectedIds.size} item(s) deleted`);
+          setSelectedIds(new Set());
+          loadMenus();
+        } catch (error) {
+          toast.error('Failed to delete items');
+        }
+      },
+      'danger',
+      'Delete All'
+    );
+  };
+
+  // --- Export helpers ---
+  const handleExportCSV = async () => {
+    try {
+      const res = await menusAPI.exportCSV(selectedTruck.id);
+      downloadBlob(res.data, `menu-${selectedTruck.name || 'export'}.csv`);
+      toast.success('CSV exported');
+    } catch (error) {
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const res = await menusAPI.exportPDF(selectedTruck.id);
+      downloadBlob(res.data, `menu-${selectedTruck.name || 'export'}.pdf`);
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
+    }
+  };
+
+  // --- CRUD handlers (with ConfirmDialog instead of confirm()) ---
   const handleSaveMenu = async (e) => {
     e.preventDefault();
     try {
@@ -67,16 +197,21 @@ export default function Menu() {
     }
   };
 
-  const handleDeleteMenu = async (id) => {
-    if (!confirm('Delete this menu and all its items?')) return;
-    try {
-      await menusAPI.delete(id);
-      toast.success('Menu deleted');
-      if (selectedMenu?.id === id) setSelectedMenu(null);
-      loadMenus();
-    } catch (error) {
-      toast.error('Failed to delete menu');
-    }
+  const handleDeleteMenu = (id) => {
+    openConfirm(
+      'Delete Menu',
+      'Delete this menu and all its items? This action cannot be undone.',
+      async () => {
+        try {
+          await menusAPI.delete(id);
+          toast.success('Menu deleted');
+          if (selectedMenu?.id === id) setSelectedMenu(null);
+          loadMenus();
+        } catch (error) {
+          toast.error('Failed to delete menu');
+        }
+      }
+    );
   };
 
   const handleSaveCategory = async (e) => {
@@ -98,15 +233,20 @@ export default function Menu() {
     }
   };
 
-  const handleDeleteCategory = async (id) => {
-    if (!confirm('Delete this category and all its items?')) return;
-    try {
-      await menusAPI.deleteCategory(id);
-      toast.success('Category deleted');
-      loadMenus();
-    } catch (error) {
-      toast.error('Failed to delete category');
-    }
+  const handleDeleteCategory = (id) => {
+    openConfirm(
+      'Delete Category',
+      'Delete this category and all its items? This action cannot be undone.',
+      async () => {
+        try {
+          await menusAPI.deleteCategory(id);
+          toast.success('Category deleted');
+          loadMenus();
+        } catch (error) {
+          toast.error('Failed to delete category');
+        }
+      }
+    );
   };
 
   const handleSaveItem = async (e) => {
@@ -136,15 +276,25 @@ export default function Menu() {
     }
   };
 
-  const handleDeleteItem = async (id) => {
-    if (!confirm('Delete this menu item?')) return;
-    try {
-      await menusAPI.deleteItem(id);
-      toast.success('Item deleted');
-      loadMenus();
-    } catch (error) {
-      toast.error('Failed to delete item');
-    }
+  const handleDeleteItem = (id) => {
+    openConfirm(
+      'Delete Item',
+      'Delete this menu item? This action cannot be undone.',
+      async () => {
+        try {
+          await menusAPI.deleteItem(id);
+          toast.success('Item deleted');
+          setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+          loadMenus();
+        } catch (error) {
+          toast.error('Failed to delete item');
+        }
+      }
+    );
   };
 
   const handleToggleSoldOut = async (item) => {
@@ -157,6 +307,25 @@ export default function Menu() {
     }
   };
 
+  // --- Detail modal handlers ---
+  const handleItemClick = (item) => {
+    setDetailItem(item);
+    setShowDetail(true);
+  };
+
+  const handleDetailEdit = (item) => {
+    setShowDetail(false);
+    setDetailItem(null);
+    openEditItem(item);
+  };
+
+  const handleDetailDelete = (item) => {
+    setShowDetail(false);
+    setDetailItem(null);
+    handleDeleteItem(item.id);
+  };
+
+  // --- Open edit/add helpers ---
   const openEditMenu = (menu) => {
     setEditingMenu(menu);
     setMenuForm({
@@ -219,6 +388,8 @@ export default function Menu() {
   }
 
   const currentMenu = menus.find(m => m.id === selectedMenu?.id) || selectedMenu;
+  const allItemIds = getAllItemIds();
+  const allSelected = allItemIds.length > 0 && selectedIds.size === allItemIds.length;
 
   return (
     <div className="space-y-6">
@@ -254,6 +425,56 @@ export default function Menu() {
             {!menu.isActive && <span className="text-xs opacity-75">(Inactive)</span>}
           </button>
         ))}
+      </div>
+
+      {/* Search Bar */}
+      <SearchBar
+        value={search}
+        onChange={setSearch}
+        placeholder="Search menu items..."
+      />
+
+      {/* Toolbar: selection count, bulk delete, export */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white rounded-lg border border-gray-200 p-3">
+        <div className="flex items-center gap-3">
+          {currentMenu && allItemIds.length > 0 && (
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+            >
+              <CheckSquare className={`h-4 w-4 ${allSelected ? 'text-primary-600' : ''}`} />
+              {allSelected ? 'Deselect All' : 'Select All'}
+            </button>
+          )}
+          {selectedIds.size > 0 && (
+            <>
+              <span className="text-sm text-gray-600">{selectedIds.size} item(s) selected</span>
+              <button
+                onClick={handleBulkDelete}
+                className="btn bg-red-600 text-white hover:bg-red-700 text-sm py-1 px-3 flex items-center gap-1"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete Selected
+              </button>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="btn btn-secondary text-sm py-1 px-3 flex items-center gap-1"
+          >
+            <Download className="h-3.5 w-3.5" />
+            CSV
+          </button>
+          <button
+            onClick={handleExportPDF}
+            className="btn btn-secondary text-sm py-1 px-3 flex items-center gap-1"
+          >
+            <FileDown className="h-3.5 w-3.5" />
+            PDF
+          </button>
+        </div>
       </div>
 
       {currentMenu ? (
@@ -323,7 +544,20 @@ export default function Menu() {
               {expandedCategories[category.id] && (
                 <div className="divide-y divide-gray-200">
                   {category.items?.map(item => (
-                    <div key={item.id} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                    <div
+                      key={item.id}
+                      className="p-4 flex items-center justify-between hover:bg-gray-50 cursor-pointer"
+                      onClick={() => handleItemClick(item)}
+                    >
+                      {/* Checkbox */}
+                      <div className="flex items-center mr-3" onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(item.id)}
+                          onChange={() => toggleSelectItem(item.id)}
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 h-4 w-4"
+                        />
+                      </div>
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <span className={`font-medium ${item.isSoldOut ? 'line-through text-gray-400' : 'text-gray-900'}`}>
@@ -357,7 +591,7 @@ export default function Menu() {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-4" onClick={e => e.stopPropagation()}>
                         <div className="text-right">
                           {item.isSpecial && item.specialPrice ? (
                             <>
@@ -645,6 +879,31 @@ export default function Menu() {
           </div>
         </div>
       )}
+
+      {/* Row Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title={detailItem?.name || 'Item Details'}
+        data={detailItem}
+        fields={itemDetailFields}
+        onClose={() => {
+          setShowDetail(false);
+          setDetailItem(null);
+        }}
+        onEdit={handleDetailEdit}
+        onDelete={handleDetailDelete}
+      />
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title={confirmAction?.title || 'Confirm'}
+        message={confirmAction?.message || 'Are you sure?'}
+        confirmLabel={confirmAction?.confirmLabel || 'Delete'}
+        variant={confirmAction?.variant || 'danger'}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 }

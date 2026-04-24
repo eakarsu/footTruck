@@ -1,10 +1,13 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const dotenv = require('dotenv');
 const path = require('path');
 const http = require('http');
 const { initializeWebSocket } = require('./services/websocket');
 const { initialize: initAutoPostScheduler } = require('./services/autoPostScheduler');
+const { apiLimiter, authLimiter } = require('./middleware/rateLimiter');
+const { sanitizeInput } = require('./middleware/validate');
 
 // Load .env from project root
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
@@ -30,10 +33,21 @@ const server = http.createServer(app);
 const io = initializeWebSocket(server);
 app.set('io', io);
 
-// Middleware
+// Security Middleware
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false
+}));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Global input sanitization
+app.use(sanitizeInput);
+
+// Rate limiting
+app.use('/api/', apiLimiter);
+app.use('/api/auth', authLimiter);
 
 // Routes
 app.use('/api/auth', authRoutes);

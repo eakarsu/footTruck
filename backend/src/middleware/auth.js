@@ -12,6 +12,16 @@ const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
+
+    // Check if token is blacklisted (logged out)
+    const blacklisted = await prisma.tokenBlacklist.findUnique({
+      where: { token }
+    });
+
+    if (blacklisted) {
+      return res.status(401).json({ error: 'Token has been revoked' });
+    }
+
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const user = await prisma.user.findUnique({

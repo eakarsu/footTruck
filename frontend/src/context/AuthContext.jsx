@@ -42,7 +42,12 @@ export function AuthProvider({ children }) {
     return res.data;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await authAPI.logout();
+    } catch (e) {
+      // Continue logout even if server call fails
+    }
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('selectedTruck');

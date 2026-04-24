@@ -1,14 +1,18 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all permits for a truck
+// Get all permits for a truck (with pagination and search)
 router.get('/truck/:truckId', authenticate, async (req, res) => {
   try {
-    const { status, type } = req.query;
+    const { status, type, search } = req.query;
+    const { page, limit, skip } = getPaginationParams(req.query);
 
     const whereClause = { truckId: req.params.truckId };
 
@@ -20,12 +24,25 @@ router.get('/truck/:truckId', authenticate, async (req, res) => {
       whereClause.type = type;
     }
 
-    const permits = await prisma.permit.findMany({
-      where: whereClause,
-      orderBy: { expiryDate: 'asc' }
-    });
+    if (search) {
+      whereClause.OR = [
+        { permitNumber: { contains: search, mode: 'insensitive' } },
+        { issuingAuthority: { contains: search, mode: 'insensitive' } },
+        { notes: { contains: search, mode: 'insensitive' } }
+      ];
+    }
 
-    res.json(permits);
+    const [permits, total] = await Promise.all([
+      prisma.permit.findMany({
+        where: whereClause,
+        orderBy: { expiryDate: 'asc' },
+        skip,
+        take: limit
+      }),
+      prisma.permit.count({ where: whereClause })
+    ]);
+
+    res.json(paginatedResponse(permits, total, page, limit));
   } catch (error) {
     console.error('Get permits error:', error);
     res.status(500).json({ error: 'Failed to get permits' });
@@ -107,6 +124,51 @@ router.put('/:id', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Update permit error:', error);
     res.status(500).json({ error: 'Failed to update permit' });
+  }
+});
+
+// Bulk delete permits
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+
+    const result = await prisma.permit.deleteMany({
+      where: { id: { in: ids } }
+    });
+
+    res.json({ message: `${result.count} permits deleted successfully`, count: result.count });
+  } catch (error) {
+    console.error('Bulk delete permits error:', error);
+    res.status(500).json({ error: 'Failed to bulk delete permits' });
+  }
+});
+
+// Bulk update permits
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'data object is required' });
+    }
+
+    const result = await prisma.permit.updateMany({
+      where: { id: { in: ids } },
+      data
+    });
+
+    res.json({ message: `${result.count} permits updated successfully`, count: result.count });
+  } catch (error) {
+    console.error('Bulk update permits error:', error);
+    res.status(500).json({ error: 'Failed to bulk update permits' });
   }
 });
 
@@ -226,6 +288,40 @@ router.get('/truck/:truckId/summary', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get summary error:', error);
     res.status(500).json({ error: 'Failed to get permit summary' });
+  }
+});
+
+// Export permits as CSV
+router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const permits = await prisma.permit.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { expiryDate: 'asc' }
+    });
+
+    const fields = ['permitNumber', 'type', 'issuingAuthority', 'issueDate', 'expiryDate', 'status', 'cost'];
+
+    sendCSV(res, permits, fields, 'permits');
+  } catch (error) {
+    console.error('Export permits CSV error:', error);
+    res.status(500).json({ error: 'Failed to export permits as CSV' });
+  }
+});
+
+// Export permits as PDF
+router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const permits = await prisma.permit.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { expiryDate: 'asc' }
+    });
+
+    const fields = ['permitNumber', 'type', 'issuingAuthority', 'issueDate', 'expiryDate', 'status', 'cost'];
+
+    sendPDF(res, permits, fields, 'Permits Report');
+  } catch (error) {
+    console.error('Export permits PDF error:', error);
+    res.status(500).json({ error: 'Failed to export permits as PDF' });
   }
 });
 

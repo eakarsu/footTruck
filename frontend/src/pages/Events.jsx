@@ -1,12 +1,39 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTruck } from '../context/TruckContext';
 import { eventsAPI, locationsAPI } from '../services/api';
-import { Calendar, Plus, X, MapPin, Users, DollarSign, Clock, Grid3X3, ListFilter, LayoutGrid } from 'lucide-react';
+import { Calendar, Plus, X, MapPin, Users, DollarSign, Clock, Grid3X3, ListFilter, LayoutGrid, Download, FileDown, CheckSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import EventCalendar from '../components/EventCalendar';
 import EventTimeline from '../components/EventTimeline';
 import RegistrationWizard from '../components/RegistrationWizard';
+import SearchBar from '../components/SearchBar';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
+import RowDetailModal from '../components/RowDetailModal';
+
+const eventDetailFields = [
+  { key: 'name', label: 'Event Name' },
+  { key: 'description', label: 'Description' },
+  { key: 'startDate', label: 'Start Date', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'endDate', label: 'End Date', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'venueAddress', label: 'Venue' },
+  { key: 'expectedAttendance', label: 'Expected Attendance', render: (v) => v ? v.toLocaleString() : '-' },
+  { key: 'vendorFee', label: 'Vendor Fee', render: (v) => v ? `$${v}` : '-' },
+  { key: 'applicationDeadline', label: 'Application Deadline', render: (v) => v ? format(new Date(v), 'MMM d, yyyy') : '-' },
+  { key: 'status', label: 'Status' }
+];
+
+function downloadBlob(blob, filename) {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
 
 export default function Events() {
   const { selectedTruck } = useTruck();
@@ -31,18 +58,67 @@ export default function Events() {
     locationId: ''
   });
 
+  // Search, pagination, bulk selection state
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+
+  // Detail modal state
+  const [showDetail, setShowDetail] = useState(false);
+  const [detailItem, setDetailItem] = useState(null);
+
+  // Confirm dialog state
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+
+  // Registration search state
+  const [regSearch, setRegSearch] = useState('');
+
   useEffect(() => {
     if (selectedTruck) loadData();
   }, [selectedTruck]);
 
+  // Reload events when search or page changes
+  useEffect(() => {
+    if (selectedTruck) loadEvents();
+  }, [search, page]);
+
+  // Reset page to 1 when search changes
+  const handleSearchChange = useCallback((val) => {
+    setSearch(val);
+    setPage(1);
+    setSelectedIds(new Set());
+  }, []);
+
+  const loadEvents = async () => {
+    try {
+      const eventsRes = await eventsAPI.getAll({ page, limit: 20, search, upcoming: true });
+      setEvents(eventsRes.data);
+      if (eventsRes.pagination) {
+        setPage(eventsRes.pagination.page);
+        setTotalPages(eventsRes.pagination.totalPages);
+        setTotal(eventsRes.pagination.total);
+      }
+    } catch (error) {
+      console.error('Failed to load events:', error);
+    }
+  };
+
   const loadData = async () => {
     try {
       const [eventsRes, regsRes, locsRes] = await Promise.all([
-        eventsAPI.getAll({ upcoming: true }),
+        eventsAPI.getAll({ page, limit: 20, search, upcoming: true }),
         eventsAPI.getRegistrations(selectedTruck.id),
         locationsAPI.getAll()
       ]);
       setEvents(eventsRes.data);
+      if (eventsRes.pagination) {
+        setPage(eventsRes.pagination.page);
+        setTotalPages(eventsRes.pagination.totalPages);
+        setTotal(eventsRes.pagination.total);
+      }
       setRegistrations(regsRes.data);
       setLocations(locsRes.data);
     } catch (error) {
@@ -75,15 +151,23 @@ export default function Events() {
     }
   };
 
-  const handleCancelRegistration = async (regId) => {
-    if (!confirm('Cancel this registration?')) return;
-    try {
-      await eventsAPI.cancelRegistration(regId);
-      toast.success('Registration cancelled');
-      loadData();
-    } catch (error) {
-      toast.error('Failed to cancel registration');
-    }
+  const handleCancelRegistration = (regId) => {
+    setConfirmAction({
+      title: 'Cancel Registration',
+      message: 'Are you sure you want to cancel this registration? This action cannot be undone.',
+      variant: 'danger',
+      confirmLabel: 'Cancel Registration',
+      action: async () => {
+        try {
+          await eventsAPI.cancelRegistration(regId);
+          toast.success('Registration cancelled');
+          loadData();
+        } catch (error) {
+          toast.error('Failed to cancel registration');
+        }
+      }
+    });
+    setShowConfirm(true);
   };
 
   const openRegisterWizard = (event) => {
@@ -98,8 +182,100 @@ export default function Events() {
     }
   };
 
+  // Row detail modal handler
+  const handleRowClick = (event) => {
+    setDetailItem(event);
+    setShowDetail(true);
+  };
+
+  // Bulk selection handlers
+  const toggleSelectEvent = (eventId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === events.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(events.map(e => e.id)));
+    }
+  };
+
+  // Bulk delete
+  const handleBulkDelete = () => {
+    setConfirmAction({
+      title: 'Delete Selected Events',
+      message: `Are you sure you want to delete ${selectedIds.size} selected event(s)? This action cannot be undone.`,
+      variant: 'danger',
+      confirmLabel: 'Delete',
+      action: async () => {
+        try {
+          await eventsAPI.bulkDelete([...selectedIds]);
+          toast.success(`${selectedIds.size} event(s) deleted`);
+          setSelectedIds(new Set());
+          loadData();
+        } catch (error) {
+          toast.error('Failed to delete events');
+        }
+      }
+    });
+    setShowConfirm(true);
+  };
+
+  // Export handlers
+  const handleExportCSV = async () => {
+    try {
+      const blob = await eventsAPI.exportCSV();
+      downloadBlob(blob, 'events.csv');
+      toast.success('CSV exported');
+    } catch (error) {
+      toast.error('Failed to export CSV');
+    }
+  };
+
+  const handleExportPDF = async () => {
+    try {
+      const blob = await eventsAPI.exportPDF();
+      downloadBlob(blob, 'events.pdf');
+      toast.success('PDF exported');
+    } catch (error) {
+      toast.error('Failed to export PDF');
+    }
+  };
+
+  // Confirm dialog handlers
+  const handleConfirm = async () => {
+    if (confirmAction?.action) {
+      await confirmAction.action();
+    }
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
+  const handleCancelConfirm = () => {
+    setShowConfirm(false);
+    setConfirmAction(null);
+  };
+
   const isRegistered = (eventId) => registrations.some(r => r.eventId === eventId);
   const getRegistration = (eventId) => registrations.find(r => r.eventId === eventId);
+
+  // Filter registrations by search
+  const filteredRegistrations = regSearch
+    ? registrations.filter(r =>
+        r.event?.name?.toLowerCase().includes(regSearch.toLowerCase()) ||
+        r.event?.venueAddress?.toLowerCase().includes(regSearch.toLowerCase()) ||
+        r.status?.toLowerCase().includes(regSearch.toLowerCase())
+      )
+    : registrations;
 
   if (loading) {
     return (
@@ -171,164 +347,265 @@ export default function Events() {
 
       {/* Browse Events */}
       {activeTab === 'browse' && (
-        <div className={viewMode === 'grid'
-          ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'
-          : 'space-y-4'
-        }>
-          {events.map(event => {
-            const reg = getRegistration(event.id);
+        <div className="space-y-4">
+          {/* Search Bar */}
+          <SearchBar
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Search events by name, venue, status..."
+          />
 
-            return viewMode === 'grid' ? (
-              <div key={event.id} className="card overflow-hidden hover:shadow-lg transition-shadow cursor-pointer" onClick={() => openRegisterWizard(event)}>
-                <div className="p-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <h3 className="font-semibold text-lg">{event.name}</h3>
-                    <span className={`px-2 py-0.5 text-xs rounded-full ${
-                      event.status === 'UPCOMING'
-                        ? 'bg-blue-100 text-blue-700'
-                        : event.status === 'ONGOING'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-700'
-                    }`}>
-                      {event.status}
-                    </span>
-                  </div>
-                  {event.description && (
-                    <p className="text-sm text-gray-600 mb-3 line-clamp-2">{event.description}</p>
-                  )}
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center gap-2 text-gray-600">
-                      <Calendar className="h-4 w-4" />
-                      {format(new Date(event.startDate), 'MMM d, yyyy')}
-                      {event.endDate !== event.startDate && ` - ${format(new Date(event.endDate), 'MMM d')}`}
+          {/* Toolbar: selection info, bulk actions, exports */}
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={toggleSelectAll}
+                className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border transition-colors ${
+                  selectedIds.size === events.length && events.length > 0
+                    ? 'bg-primary-50 border-primary-300 text-primary-700'
+                    : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <CheckSquare className="h-4 w-4" />
+                {selectedIds.size > 0
+                  ? `${selectedIds.size} selected`
+                  : 'Select all'
+                }
+              </button>
+              {selectedIds.size > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  className="btn bg-red-600 text-white hover:bg-red-700 text-sm px-3 py-1.5"
+                >
+                  Delete Selected ({selectedIds.size})
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportCSV}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <Download className="h-4 w-4" />
+                CSV
+              </button>
+              <button
+                onClick={handleExportPDF}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <FileDown className="h-4 w-4" />
+                PDF
+              </button>
+            </div>
+          </div>
+
+          {/* Event Cards */}
+          <div className={viewMode === 'grid'
+            ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'
+            : 'space-y-4'
+          }>
+            {events.map(event => {
+              const reg = getRegistration(event.id);
+              const isSelected = selectedIds.has(event.id);
+
+              return viewMode === 'grid' ? (
+                <div
+                  key={event.id}
+                  className={`card overflow-hidden hover:shadow-lg transition-shadow cursor-pointer ${
+                    isSelected ? 'ring-2 ring-primary-500' : ''
+                  }`}
+                  onClick={() => handleRowClick(event)}
+                >
+                  <div className="p-4">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => { e.stopPropagation(); toggleSelectEvent(event.id); }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <h3 className="font-semibold text-lg">{event.name}</h3>
+                      </div>
+                      <span className={`px-2 py-0.5 text-xs rounded-full ${
+                        event.status === 'UPCOMING'
+                          ? 'bg-blue-100 text-blue-700'
+                          : event.status === 'ONGOING'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {event.status}
+                      </span>
                     </div>
-                    {event.venueAddress && (
-                      <div className="flex items-center gap-2 text-gray-600">
-                        <MapPin className="h-4 w-4" />
-                        {event.venueAddress}
-                      </div>
+                    {event.description && (
+                      <p className="text-sm text-gray-600 mb-3 line-clamp-2">{event.description}</p>
                     )}
-                    {event.expectedAttendance && (
+                    <div className="space-y-2 text-sm">
                       <div className="flex items-center gap-2 text-gray-600">
-                        <Users className="h-4 w-4" />
-                        {event.expectedAttendance.toLocaleString()} expected
+                        <Calendar className="h-4 w-4" />
+                        {format(new Date(event.startDate), 'MMM d, yyyy')}
+                        {event.endDate !== event.startDate && ` - ${format(new Date(event.endDate), 'MMM d')}`}
                       </div>
-                    )}
-                    {event.vendorFee && (
-                      <div className="flex items-center gap-2 text-gray-600">
-                        <DollarSign className="h-4 w-4" />
-                        ${event.vendorFee} vendor fee
+                      {event.venueAddress && (
+                        <div className="flex items-center gap-2 text-gray-600">
+                          <MapPin className="h-4 w-4" />
+                          {event.venueAddress}
+                        </div>
+                      )}
+                      {event.expectedAttendance && (
+                        <div className="flex items-center gap-2 text-gray-600">
+                          <Users className="h-4 w-4" />
+                          {event.expectedAttendance.toLocaleString()} expected
+                        </div>
+                      )}
+                      {event.vendorFee && (
+                        <div className="flex items-center gap-2 text-gray-600">
+                          <DollarSign className="h-4 w-4" />
+                          ${event.vendorFee} vendor fee
+                        </div>
+                      )}
+                      {event.applicationDeadline && (
+                        <div className="flex items-center gap-2 text-yellow-600">
+                          <Clock className="h-4 w-4" />
+                          Apply by {format(new Date(event.applicationDeadline), 'MMM d')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="p-4 bg-gray-50 border-t">
+                    {reg ? (
+                      <div className="flex items-center justify-between">
+                        <span className={`px-2 py-1 text-xs rounded-full ${
+                          reg.status === 'APPROVED'
+                            ? 'bg-green-100 text-green-700'
+                            : reg.status === 'PENDING'
+                              ? 'bg-yellow-100 text-yellow-700'
+                              : 'bg-red-100 text-red-700'
+                        }`}>
+                          {reg.status}
+                        </span>
+                        {reg.boothNumber && (
+                          <span className="text-sm text-gray-500">
+                            Booth: {reg.boothNumber}
+                          </span>
+                        )}
                       </div>
-                    )}
-                    {event.applicationDeadline && (
-                      <div className="flex items-center gap-2 text-yellow-600">
-                        <Clock className="h-4 w-4" />
-                        Apply by {format(new Date(event.applicationDeadline), 'MMM d')}
-                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openRegisterWizard(event); }}
+                        className="btn btn-primary w-full"
+                      >
+                        Register
+                      </button>
                     )}
                   </div>
                 </div>
-                <div className="p-4 bg-gray-50 border-t">
-                  {reg ? (
-                    <div className="flex items-center justify-between">
-                      <span className={`px-2 py-1 text-xs rounded-full ${
-                        reg.status === 'APPROVED'
-                          ? 'bg-green-100 text-green-700'
-                          : reg.status === 'PENDING'
-                            ? 'bg-yellow-100 text-yellow-700'
-                            : 'bg-red-100 text-red-700'
-                      }`}>
-                        {reg.status}
-                      </span>
-                      {reg.boothNumber && (
-                        <span className="text-sm text-gray-500">
-                          Booth: {reg.boothNumber}
+              ) : (
+                <div
+                  key={event.id}
+                  className={`card p-4 flex items-center justify-between hover:shadow-lg transition-shadow cursor-pointer ${
+                    isSelected ? 'ring-2 ring-primary-500' : ''
+                  }`}
+                  onClick={() => handleRowClick(event)}
+                >
+                  <div className="flex items-center gap-3 flex-1">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => { e.stopPropagation(); toggleSelectEvent(event.id); }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-1">
+                        <h3 className="font-semibold">{event.name}</h3>
+                        <span className={`px-2 py-0.5 text-xs rounded-full ${
+                          event.status === 'UPCOMING'
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'bg-green-100 text-green-700'
+                        }`}>
+                          {event.status}
                         </span>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-4 text-sm text-gray-500">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-4 w-4" />
+                          {format(new Date(event.startDate), 'MMM d, yyyy')}
+                        </span>
+                        {event.venueAddress && (
+                          <span className="flex items-center gap-1">
+                            <MapPin className="h-4 w-4" />
+                            {event.venueAddress}
+                          </span>
+                        )}
+                        {event.vendorFee && (
+                          <span className="flex items-center gap-1">
+                            <DollarSign className="h-4 w-4" />
+                            ${event.vendorFee}
+                          </span>
+                        )}
+                      </div>
                     </div>
+                  </div>
+                  {reg ? (
+                    <span className={`px-3 py-1 text-sm rounded-full ${
+                      reg.status === 'APPROVED'
+                        ? 'bg-green-100 text-green-700'
+                        : reg.status === 'PENDING'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-red-100 text-red-700'
+                    }`}>
+                      {reg.status}
+                    </span>
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); openRegisterWizard(event); }}
-                      className="btn btn-primary w-full"
+                      className="btn btn-primary"
                     >
                       Register
                     </button>
                   )}
                 </div>
+              );
+            })}
+            {events.length === 0 && (
+              <div className="col-span-full text-center py-12">
+                <Calendar className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500">No upcoming events</p>
               </div>
-            ) : (
-              <div key={event.id} className="card p-4 flex items-center justify-between hover:shadow-lg transition-shadow cursor-pointer" onClick={() => openRegisterWizard(event)}>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <h3 className="font-semibold">{event.name}</h3>
-                    <span className={`px-2 py-0.5 text-xs rounded-full ${
-                      event.status === 'UPCOMING'
-                        ? 'bg-blue-100 text-blue-700'
-                        : 'bg-green-100 text-green-700'
-                    }`}>
-                      {event.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-4 text-sm text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <Calendar className="h-4 w-4" />
-                      {format(new Date(event.startDate), 'MMM d, yyyy')}
-                    </span>
-                    {event.venueAddress && (
-                      <span className="flex items-center gap-1">
-                        <MapPin className="h-4 w-4" />
-                        {event.venueAddress}
-                      </span>
-                    )}
-                    {event.vendorFee && (
-                      <span className="flex items-center gap-1">
-                        <DollarSign className="h-4 w-4" />
-                        ${event.vendorFee}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {reg ? (
-                  <span className={`px-3 py-1 text-sm rounded-full ${
-                    reg.status === 'APPROVED'
-                      ? 'bg-green-100 text-green-700'
-                      : reg.status === 'PENDING'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-red-100 text-red-700'
-                  }`}>
-                    {reg.status}
-                  </span>
-                ) : (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); openRegisterWizard(event); }}
-                    className="btn btn-primary"
-                  >
-                    Register
-                  </button>
-                )}
-              </div>
-            );
-          })}
-          {events.length === 0 && (
-            <div className="col-span-full text-center py-12">
-              <Calendar className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500">No upcoming events</p>
-            </div>
-          )}
+            )}
+          </div>
+
+          {/* Pagination */}
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={total}
+            onPageChange={(p) => { setPage(p); setSelectedIds(new Set()); }}
+          />
         </div>
       )}
 
       {/* My Registrations */}
       {activeTab === 'registrations' && (
         <div className="space-y-4">
-          {registrations.map(reg => (
+          {/* Registration Search */}
+          <SearchBar
+            value={regSearch}
+            onChange={setRegSearch}
+            placeholder="Search registrations by event name, venue, status..."
+          />
+
+          {filteredRegistrations.map(reg => (
             <div key={reg.id} className="card p-4 hover:shadow-lg transition-shadow cursor-pointer" onClick={() => { setSelectedEvent(reg.event); setShowWizard(true); }}>
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <h3 className="font-semibold text-lg">{reg.event?.name}</h3>
                   <p className="text-sm text-gray-500 mb-3">
                     {format(new Date(reg.event?.startDate), 'MMMM d, yyyy')}
-                    {reg.event?.venueAddress && ` • ${reg.event.venueAddress}`}
+                    {reg.event?.venueAddress && ` \u2022 ${reg.event.venueAddress}`}
                   </p>
 
                   <div className="flex flex-wrap gap-3">
@@ -375,6 +652,12 @@ export default function Events() {
               </div>
             </div>
           ))}
+          {filteredRegistrations.length === 0 && registrations.length > 0 && (
+            <div className="text-center py-12">
+              <Calendar className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+              <p className="text-gray-500">No registrations match your search</p>
+            </div>
+          )}
           {registrations.length === 0 && (
             <div className="text-center py-12">
               <Calendar className="h-12 w-12 text-gray-300 mx-auto mb-3" />
@@ -532,6 +815,31 @@ export default function Events() {
           }}
         />
       )}
+
+      {/* Event Detail Modal */}
+      <RowDetailModal
+        isOpen={showDetail}
+        title={detailItem?.name || 'Event Details'}
+        data={detailItem}
+        fields={eventDetailFields}
+        onClose={() => { setShowDetail(false); setDetailItem(null); }}
+        onEdit={(event) => {
+          setShowDetail(false);
+          setDetailItem(null);
+          openRegisterWizard(event);
+        }}
+      />
+
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={showConfirm}
+        title={confirmAction?.title || 'Confirm'}
+        message={confirmAction?.message || 'Are you sure?'}
+        confirmLabel={confirmAction?.confirmLabel || 'Confirm'}
+        variant={confirmAction?.variant || 'danger'}
+        onConfirm={handleConfirm}
+        onCancel={handleCancelConfirm}
+      />
     </div>
   );
 }

@@ -2,32 +2,37 @@ const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const analyticsService = require('../services/analyticsService');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
 // ==================== SALES ====================
 
-// Get sales for a truck
+// Get sales for a truck (with pagination and search)
 router.get('/truck/:truckId/sales', authenticate, async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
+    const { page, limit, skip, search } = getPaginationParams(req.query);
 
     const whereClause = { truckId: req.params.truckId };
 
     if (startDate && endDate) {
-      whereClause.date = {
-        gte: new Date(startDate),
-        lte: new Date(endDate)
-      };
+      whereClause.date = { gte: new Date(startDate), lte: new Date(endDate) };
     }
 
-    const sales = await prisma.sale.findMany({
-      where: whereClause,
-      orderBy: { date: 'desc' }
-    });
+    if (search) {
+      whereClause.notes = { contains: search, mode: 'insensitive' };
+    }
 
-    res.json(sales);
+    const [sales, total] = await Promise.all([
+      prisma.sale.findMany({ where: whereClause, orderBy: { date: 'desc' }, skip, take: limit }),
+      prisma.sale.count({ where: whereClause })
+    ]);
+
+    res.json(paginatedResponse(sales, total, page, limit));
   } catch (error) {
     console.error('Get sales error:', error);
     res.status(500).json({ error: 'Failed to get sales' });
@@ -589,6 +594,101 @@ router.get('/goals/:id/progress', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get goal progress error:', error);
     res.status(500).json({ error: 'Failed to get goal progress' });
+  }
+});
+
+// ==================== BULK OPERATIONS & EXPORTS ====================
+
+// Bulk delete expenses
+router.delete('/expenses/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.expense.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} expenses deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk delete expenses' });
+  }
+});
+
+// Bulk update expenses
+router.patch('/expenses/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.expense.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} expenses updated successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk update expenses' });
+  }
+});
+
+// Bulk delete sales
+router.delete('/sales/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.sale.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} sales records deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk delete sales' });
+  }
+});
+
+// Export sales as CSV
+router.get('/truck/:truckId/sales/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const sales = await prisma.sale.findMany({ where: { truckId: req.params.truckId }, orderBy: { date: 'desc' } });
+    const data = sales.map(s => ({
+      date: s.date.toISOString().split('T')[0], cashSales: s.cashSales, cardSales: s.cardSales,
+      mobileSales: s.mobileSales, totalSales: s.totalSales, transactionCount: s.transactionCount, averageTicket: s.averageTicket
+    }));
+    sendCSV(res, data, ['date', 'cashSales', 'cardSales', 'mobileSales', 'totalSales', 'transactionCount', 'averageTicket'], 'sales-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export sales' });
+  }
+});
+
+// Export sales as PDF
+router.get('/truck/:truckId/sales/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const sales = await prisma.sale.findMany({ where: { truckId: req.params.truckId }, orderBy: { date: 'desc' } });
+    const columns = ['Date', 'Cash', 'Card', 'Mobile', 'Total', 'Transactions', 'Avg Ticket'];
+    const rows = sales.map(s => [
+      s.date.toISOString().split('T')[0], `$${s.cashSales.toFixed(2)}`, `$${s.cardSales.toFixed(2)}`,
+      `$${s.mobileSales.toFixed(2)}`, `$${s.totalSales.toFixed(2)}`, s.transactionCount, `$${s.averageTicket.toFixed(2)}`
+    ]);
+    sendPDF(res, 'Sales Report', columns, rows, 'sales-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export sales' });
+  }
+});
+
+// Export expenses as CSV
+router.get('/truck/:truckId/expenses/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const expenses = await prisma.expense.findMany({ where: { truckId: req.params.truckId }, orderBy: { date: 'desc' } });
+    const data = expenses.map(e => ({
+      date: e.date.toISOString().split('T')[0], category: e.category, description: e.description,
+      amount: e.amount, vendor: e.vendor || '', paymentMethod: e.paymentMethod || ''
+    }));
+    sendCSV(res, data, ['date', 'category', 'description', 'amount', 'vendor', 'paymentMethod'], 'expenses-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export expenses' });
+  }
+});
+
+// Export expenses as PDF
+router.get('/truck/:truckId/expenses/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const expenses = await prisma.expense.findMany({ where: { truckId: req.params.truckId }, orderBy: { date: 'desc' } });
+    const columns = ['Date', 'Category', 'Description', 'Amount', 'Vendor'];
+    const rows = expenses.map(e => [
+      e.date.toISOString().split('T')[0], e.category, e.description, `$${e.amount.toFixed(2)}`, e.vendor || '-'
+    ]);
+    sendPDF(res, 'Expenses Report', columns, rows, 'expenses-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export expenses' });
   }
 });
 

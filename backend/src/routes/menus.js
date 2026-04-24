@@ -1,15 +1,28 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all menus for a truck
+// Get all menus for a truck (with search)
 router.get('/truck/:truckId', authenticate, async (req, res) => {
   try {
+    const { search } = req.query;
+
+    const whereClause = { truckId: req.params.truckId };
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { description: { contains: search, mode: 'insensitive' } }
+      ];
+    }
+
     const menus = await prisma.menu.findMany({
-      where: { truckId: req.params.truckId },
+      where: whereClause,
       include: {
         categories: {
           include: { items: true },
@@ -365,6 +378,79 @@ router.get('/public/truck/:truckId/items', async (req, res) => {
   } catch (error) {
     console.error('Get public menu items error:', error);
     res.status(500).json({ error: 'Failed to get menu items' });
+  }
+});
+
+// ==================== BULK OPERATIONS & EXPORTS ====================
+
+// Bulk delete menu items
+router.delete('/items/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.menuItem.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} items deleted successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk delete items' });
+  }
+});
+
+// Bulk update menu items
+router.patch('/items/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.menuItem.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} items updated successfully` });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to bulk update items' });
+  }
+});
+
+// Export menu as CSV
+router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const menus = await prisma.menu.findMany({
+      where: { truckId: req.params.truckId },
+      include: { categories: { include: { items: true } } }
+    });
+    const data = [];
+    menus.forEach(m => {
+      m.categories.forEach(c => {
+        c.items.forEach(i => {
+          data.push({
+            menu: m.name, category: c.name, name: i.name, description: i.description || '',
+            price: i.price, isAvailable: i.isAvailable, calories: i.calories || '',
+            allergens: i.allergens.join(', '), tags: i.tags.join(', '), prepTime: i.prepTime || ''
+          });
+        });
+      });
+    });
+    sendCSV(res, data, ['menu', 'category', 'name', 'description', 'price', 'isAvailable', 'calories', 'allergens', 'tags', 'prepTime'], 'menu-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export menu' });
+  }
+});
+
+// Export menu as PDF
+router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const menus = await prisma.menu.findMany({
+      where: { truckId: req.params.truckId },
+      include: { categories: { include: { items: true } } }
+    });
+    const columns = ['Menu', 'Category', 'Item', 'Price', 'Available', 'Calories'];
+    const rows = [];
+    menus.forEach(m => {
+      m.categories.forEach(c => {
+        c.items.forEach(i => {
+          rows.push([m.name, c.name, i.name, `$${i.price.toFixed(2)}`, i.isAvailable ? 'Yes' : 'No', i.calories || '-']);
+        });
+      });
+    });
+    sendPDF(res, 'Menu Report', columns, rows, 'menu-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export menu' });
   }
 });
 

@@ -4,6 +4,9 @@ const { authenticate } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const preOrderService = require('../services/preOrderService');
 const notificationService = require('../services/notificationService');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -15,43 +18,46 @@ const generateOrderNumber = () => {
   return `FT-${timestamp}-${random}`;
 };
 
-// Get all orders for a truck
+// Get all orders for a truck (with pagination and search)
 router.get('/truck/:truckId', authenticate, async (req, res) => {
   try {
     const { status, date, type } = req.query;
+    const { page, limit, skip, search } = getPaginationParams(req.query);
 
     const whereClause = { truckId: req.params.truckId };
 
-    if (status) {
-      whereClause.status = status;
-    }
+    if (status) whereClause.status = status;
+    if (type) whereClause.type = type;
 
     if (date) {
       const startOfDay = new Date(date);
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
-      whereClause.createdAt = {
-        gte: startOfDay,
-        lte: endOfDay
-      };
+      whereClause.createdAt = { gte: startOfDay, lte: endOfDay };
     }
 
-    if (type) {
-      whereClause.type = type;
+    if (search) {
+      whereClause.OR = [
+        { orderNumber: { contains: search, mode: 'insensitive' } },
+        { customerName: { contains: search, mode: 'insensitive' } },
+        { customerPhone: { contains: search, mode: 'insensitive' } },
+        { customerEmail: { contains: search, mode: 'insensitive' } }
+      ];
     }
 
-    const orders = await prisma.order.findMany({
-      where: whereClause,
-      include: {
-        items: {
-          include: { menuItem: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const [orders, total] = await Promise.all([
+      prisma.order.findMany({
+        where: whereClause,
+        include: { items: { include: { menuItem: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      prisma.order.count({ where: whereClause })
+    ]);
 
-    res.json(orders);
+    res.json(paginatedResponse(orders, total, page, limit));
   } catch (error) {
     console.error('Get orders error:', error);
     res.status(500).json({ error: 'Failed to get orders' });
@@ -474,6 +480,89 @@ router.post('/pre-order', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Create pre-order error:', error);
     res.status(500).json({ error: 'Failed to create pre-order' });
+  }
+});
+
+// ==================== BULK OPERATIONS ====================
+
+// Bulk delete orders
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+
+    await prisma.order.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} orders deleted successfully` });
+  } catch (error) {
+    console.error('Bulk delete orders error:', error);
+    res.status(500).json({ error: 'Failed to bulk delete orders' });
+  }
+});
+
+// Bulk update order status
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+
+    await prisma.order.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} orders updated successfully` });
+  } catch (error) {
+    console.error('Bulk update orders error:', error);
+    res.status(500).json({ error: 'Failed to bulk update orders' });
+  }
+});
+
+// Export orders as CSV
+router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const orders = await prisma.order.findMany({
+      where: { truckId: req.params.truckId },
+      include: { items: { include: { menuItem: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const data = orders.map(o => ({
+      orderNumber: o.orderNumber,
+      status: o.status,
+      type: o.type,
+      customerName: o.customerName || '',
+      subtotal: o.subtotal,
+      tax: o.tax,
+      total: o.total,
+      paymentMethod: o.paymentMethod || '',
+      paymentStatus: o.paymentStatus,
+      items: o.items.map(i => `${i.menuItem.name} x${i.quantity}`).join('; '),
+      createdAt: o.createdAt.toISOString()
+    }));
+
+    const fields = ['orderNumber', 'status', 'type', 'customerName', 'subtotal', 'tax', 'total', 'paymentMethod', 'paymentStatus', 'items', 'createdAt'];
+    sendCSV(res, data, fields, 'orders-export');
+  } catch (error) {
+    console.error('Export orders CSV error:', error);
+    res.status(500).json({ error: 'Failed to export orders' });
+  }
+});
+
+// Export orders as PDF
+router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const orders = await prisma.order.findMany({
+      where: { truckId: req.params.truckId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const columns = ['Order #', 'Status', 'Type', 'Customer', 'Total', 'Payment', 'Date'];
+    const rows = orders.map(o => [
+      o.orderNumber, o.status, o.type, o.customerName || '-',
+      `$${o.total.toFixed(2)}`, o.paymentStatus,
+      o.createdAt.toLocaleDateString()
+    ]);
+
+    sendPDF(res, 'Orders Report', columns, rows, 'orders-export');
+  } catch (error) {
+    console.error('Export orders PDF error:', error);
+    res.status(500).json({ error: 'Failed to export orders' });
   }
 });
 

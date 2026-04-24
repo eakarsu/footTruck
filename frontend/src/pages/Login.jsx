@@ -82,7 +82,13 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className="mt-4 text-center">
+            <Link to="/forgot-password" className="text-sm text-primary-600 hover:text-primary-700">
+              Forgot your password?
+            </Link>
+          </div>
+
+          <div className="mt-4 text-center">
             <p className="text-gray-600">
               Don't have an account?{' '}
               <Link to="/register" className="text-primary-600 hover:text-primary-700 font-medium">
@@ -97,7 +103,7 @@ export default function Login() {
               type="button"
               onClick={() => {
                 setEmail('demo@foodtruck.com');
-                setPassword('password123');
+                setPassword('Demo@1234');
               }}
               className="w-full mt-2 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg text-sm font-medium transition-colors"
             >

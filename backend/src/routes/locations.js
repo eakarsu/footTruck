@@ -1,21 +1,38 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
+const { sendCSV, sendPDF } = require('../utils/exportHelpers');
+const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Get all locations
+// Get all locations (with pagination and search)
 router.get('/', authenticate, async (req, res) => {
   try {
-    const locations = await prisma.location.findMany({
-      include: {
-        truckLocations: {
-          include: { truck: true }
-        }
-      }
-    });
-    res.json(locations);
+    const { page, limit, skip, search } = getPaginationParams(req.query);
+
+    const whereClause = {};
+    if (search) {
+      whereClause.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { address: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } }
+      ];
+    }
+
+    const [locations, total] = await Promise.all([
+      prisma.location.findMany({
+        where: whereClause,
+        include: { truckLocations: { include: { truck: true } } },
+        skip,
+        take: limit
+      }),
+      prisma.location.count({ where: whereClause })
+    ]);
+
+    res.json(paginatedResponse(locations, total, page, limit));
   } catch (error) {
     console.error('Get locations error:', error);
     res.status(500).json({ error: 'Failed to get locations' });
@@ -249,6 +266,60 @@ router.get('/truck/:truckId/history', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get history error:', error);
     res.status(500).json({ error: 'Failed to get location history' });
+  }
+});
+
+// ==================== BULK OPERATIONS ====================
+
+// Bulk delete locations
+router.delete('/bulk-delete', authenticate, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.location.deleteMany({ where: { id: { in: ids } } });
+    res.json({ message: `${ids.length} locations deleted successfully` });
+  } catch (error) {
+    console.error('Bulk delete locations error:', error);
+    res.status(500).json({ error: 'Failed to bulk delete locations' });
+  }
+});
+
+// Bulk update locations
+router.patch('/bulk-update', authenticate, async (req, res) => {
+  try {
+    const { ids, data } = req.body;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
+    await prisma.location.updateMany({ where: { id: { in: ids } }, data });
+    res.json({ message: `${ids.length} locations updated successfully` });
+  } catch (error) {
+    console.error('Bulk update locations error:', error);
+    res.status(500).json({ error: 'Failed to bulk update locations' });
+  }
+});
+
+// Export locations as CSV
+router.get('/export/csv', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const locations = await prisma.location.findMany({ orderBy: { name: 'asc' } });
+    const data = locations.map(l => ({
+      name: l.name, address: l.address, city: l.city, state: l.state,
+      zipCode: l.zipCode, type: l.type, latitude: l.latitude || '', longitude: l.longitude || ''
+    }));
+    sendCSV(res, data, ['name', 'address', 'city', 'state', 'zipCode', 'type', 'latitude', 'longitude'], 'locations-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export locations' });
+  }
+});
+
+// Export locations as PDF
+router.get('/export/pdf', authenticate, exportLimiter, async (req, res) => {
+  try {
+    const locations = await prisma.location.findMany({ orderBy: { name: 'asc' } });
+    const columns = ['Name', 'Address', 'City', 'State', 'Type'];
+    const rows = locations.map(l => [l.name, l.address, l.city, l.state, l.type]);
+    sendPDF(res, 'Locations Report', columns, rows, 'locations-export');
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to export locations' });
   }
 });
 
