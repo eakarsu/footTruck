@@ -20,6 +20,7 @@ import Financial from './pages/Financial';
 import Events from './pages/Events';
 import Permits from './pages/Permits';
 import AI from './pages/AI';
+import AIAdvanced from './pages/AIAdvanced';
 import Settings from './pages/Settings';
 import CustomerMap from './pages/CustomerMap';
 import Analytics from './pages/Analytics';
@@ -72,6 +73,7 @@ function AppRoutes() {
                     <Route path="/events" element={<Events />} />
                     <Route path="/permits" element={<Permits />} />
                     <Route path="/ai" element={<AI />} />
+                    <Route path="/ai-advanced" element={<AIAdvanced />} />
                     <Route path="/analytics" element={<Analytics />} />
                     <Route path="/settings" element={<Settings />} />
                   </Routes>

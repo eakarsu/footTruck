@@ -38,7 +38,32 @@ const navItems = [
   { path: '/events', label: 'Events', icon: Calendar },
   { path: '/permits', label: 'Permits', icon: FileText },
   { path: '/ai', label: 'AI Features', icon: Sparkles },
+  { path: '/ai-advanced', label: 'AI Advanced', icon: Sparkles },
   { path: '/settings', label: 'Settings', icon: Settings },
+
+  // === Batch 10 Gaps & Frontend Mounts === nav
+  { path: '/batch10/cf-customer-mobile-app-with-push-nearby', label: "Customer mobile app with push (nearb" },
+  { path: '/batch10/cf-vision-based-food-qa-scoring-per', label: "Vision-based food QA scoring per shi" },
+  { path: '/batch10/cf-dynamic-pricing-engine-demand-weather-inventory', label: "Dynamic pricing engine (demand × wea" },
+  { path: '/batch10/cf-supplier-ordering-agent-auto-po-based', label: "Supplier ordering agent (auto-PO bas" },
+  { path: '/batch10/cf-crew-scheduling-ai-fairness-fatigue-skill', label: "Crew scheduling AI (fairness + fatig" },
+  { path: '/batch10/cf-voice-ordering-through-phone-drive-up', label: "Voice ordering through phone / drive" },
+  { path: '/batch10/cf-loyalty-program-with-ai-personalized-offers', label: "Loyalty program with AI personalized" },
+  { path: '/batch10/gap-no-vision-based-food-plating-qa', label: "No vision-based food / plating QA" },
+  { path: '/batch10/gap-no-dynamic-pricing-ai-despite-demand', label: "No dynamic pricing AI (despite deman" },
+  { path: '/batch10/gap-no-supplier-sourcing-optimization', label: "No supplier-sourcing optimization" },
+  { path: '/batch10/gap-no-predictive-equipment-maintenance', label: "No predictive equipment maintenance" },
+  { path: '/batch10/gap-no-crew-scheduling-optimization', label: "No crew scheduling optimization" },
+  { path: '/batch10/gap-no-voice-ordering-agent', label: "No voice ordering agent" },
+  { path: '/batch10/gap-no-customer-loyalty-churn-ai', label: "No customer-loyalty / churn AI" },
+  { path: '/batch10/gap-no-payment-stripe-integration-in-the', label: "No payment / Stripe integration in t" },
+  { path: '/batch10/gap-no-customer-mobile-app-web-only', label: "No customer mobile app (web only)" },
+  { path: '/batch10/gap-no-loyalty-rewards-backend', label: "No loyalty / rewards backend" },
+  { path: '/batch10/gap-no-crew-scheduling-module', label: "No crew scheduling module" },
+  { path: '/batch10/gap-no-supplier-vendor-procurement-module', label: "No supplier / vendor procurement mod" },
+  { path: '/batch10/gap-no-webhooks-for-partners-doordash-drive', label: "No webhooks for partners (DoorDash D" },
+  { path: '/batch10/gap-no-emergency-incident-reporting', label: "No emergency / incident reporting" },
+  { path: '/batch10/gap-no-real-time-order-tracking-sockets', label: "No real-time order tracking sockets" },
 ];
 
 export default function Layout({ children }) {

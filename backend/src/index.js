@@ -63,6 +63,7 @@ app.use('/api/permits', permitRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/gps', gpsRoutes);
+app.use('/api/ai/mobile-push', require('./routes/mobileNotifications')); app.use('/api/ai/vision-food-qa', require('./routes/visionFoodQA')); app.use('/api/ai/dynamic-pricing', require('./routes/dynamicPricing')); app.use('/api/ai/supplier-ordering', require('./routes/supplierOrdering')); app.use('/api/ai/crew-scheduling', require('./routes/crewScheduling')); app.use('/api/ai/voice-ordering', require('./routes/voiceOrdering')); app.use('/api/ai/loyalty', require('./routes/loyaltyAI'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -87,3 +88,20 @@ server.listen(PORT, () => {
 });
 
 module.exports = { app, server, io };
+
+// === Batch 10 Gaps & Frontend Mounts === (mounts)
+app.use('/api/gap-no-vision-based-food-plating-qa', require('./routes/gap_no_vision_based_food_plating_qa'));
+app.use('/api/gap-no-dynamic-pricing-ai-despite-demand', require('./routes/gap_no_dynamic_pricing_ai_despite_demand'));
+app.use('/api/gap-no-supplier-sourcing-optimization', require('./routes/gap_no_supplier_sourcing_optimization'));
+app.use('/api/gap-no-predictive-equipment-maintenance', require('./routes/gap_no_predictive_equipment_maintenance'));
+app.use('/api/gap-no-crew-scheduling-optimization', require('./routes/gap_no_crew_scheduling_optimization'));
+app.use('/api/gap-no-voice-ordering-agent', require('./routes/gap_no_voice_ordering_agent'));
+app.use('/api/gap-no-customer-loyalty-churn-ai', require('./routes/gap_no_customer_loyalty_churn_ai'));
+app.use('/api/gap-no-payment-stripe-integration-in-the', require('./routes/gap_no_payment_stripe_integration_in_the'));
+app.use('/api/gap-no-customer-mobile-app-web-only', require('./routes/gap_no_customer_mobile_app_web_only'));
+app.use('/api/gap-no-loyalty-rewards-backend', require('./routes/gap_no_loyalty_rewards_backend'));
+app.use('/api/gap-no-crew-scheduling-module', require('./routes/gap_no_crew_scheduling_module'));
+app.use('/api/gap-no-supplier-vendor-procurement-module', require('./routes/gap_no_supplier_vendor_procurement_module'));
+app.use('/api/gap-no-webhooks-for-partners-doordash-drive', require('./routes/gap_no_webhooks_for_partners_doordash_drive'));
+app.use('/api/gap-no-emergency-incident-reporting', require('./routes/gap_no_emergency_incident_reporting'));
+app.use('/api/gap-no-real-time-order-tracking-sockets', require('./routes/gap_no_real_time_order_tracking_sockets'));

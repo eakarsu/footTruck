@@ -281,7 +281,11 @@ export const aiAPI = {
   getEnhancedForecast: (truckId, params) => api.get(`/ai/truck/${truckId}/demand-forecast/enhanced`, { params }),
   getDemandPatterns: (truckId, params) => api.get(`/ai/truck/${truckId}/demand-patterns`, { params }),
   generatePredictions: (truckId, data) => api.post(`/ai/truck/${truckId}/predictions/generate`, data),
-  generateResponse: (truckId, data) => api.post(`/ai/truck/${truckId}/generate-response`, data)
+  generateResponse: (truckId, data) => api.post(`/ai/truck/${truckId}/generate-response`, data),
+  // Mechanical AI ops added in apply pass
+  dynamicPricing: (truckId, data) => api.post(`/ai/truck/${truckId}/dynamic-pricing`, data || {}),
+  predictMaintenance: (truckId, data) => api.post(`/ai/truck/${truckId}/predict-maintenance`, data),
+  crewSchedule: (truckId, data) => api.post(`/ai/truck/${truckId}/crew-schedule`, data)
 };
 
 // Dashboard
