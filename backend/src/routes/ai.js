@@ -940,4 +940,160 @@ router.post('/truck/:truckId/predictions/generate', authenticate, async (req, re
   }
 });
 
+// Audit-driven addition: "Dynamic pricing engine".
+router.post('/truck/:truckId/dynamic-pricing', authenticate, async (req, res) => {
+  try {
+    const truckId = req.params.truckId;
+    const { hourOfDay, dayOfWeek, weatherOverride } = req.body || {};
+
+    const truck = await prisma.truck.findUnique({ where: { id: truckId } });
+    if (!truck) {
+      return res.status(404).json({ error: 'Truck not found' });
+    }
+
+    const menuItems = await prisma.menuItem.findMany({
+      where: { truckId },
+      take: 50,
+    }).catch(() => []);
+
+    let weather = weatherOverride || null;
+    if (!weather) {
+      try {
+        weather = await weatherService.getCurrent({ truckId });
+      } catch (_) {
+        weather = null;
+      }
+    }
+
+    const recentOrders = await prisma.order.findMany({
+      where: { truckId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }).catch(() => []);
+
+    const prompt = `You are a food-truck dynamic-pricing engine. Recommend per-item price adjustments for the requested time slot.
+
+Truck: ${truck.name || truckId}
+Hour of day: ${hourOfDay ?? 'unspecified'}
+Day of week: ${dayOfWeek ?? 'unspecified'}
+Weather: ${JSON.stringify(weather)}
+
+Menu items (sample):
+${JSON.stringify(menuItems.slice(0, 30), null, 2)}
+
+Recent orders (sample, last 100):
+${JSON.stringify(recentOrders.slice(0, 30), null, 2)}
+
+Respond with strict JSON only:
+{"window": <string>, "items": [{"item_id": <id>, "current_price": <number>, "recommended_price": <number>, "delta_pct": <number>, "reason": <string>}], "global_strategy": <string>, "warnings": [<strings>]}`;
+
+    const ai = await openrouter.chat([{ role: 'user', content: prompt }], { maxTokens: 1500 });
+    let parsed = null;
+    try {
+      const match = (ai || '').match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : null;
+    } catch (_) {
+      parsed = null;
+    }
+
+    res.json({
+      truckId,
+      pricing: parsed || { raw: ai },
+    });
+  } catch (error) {
+    console.error('Dynamic pricing error:', error);
+    res.status(500).json({ error: 'Failed to generate dynamic pricing' });
+  }
+});
+
+// Audit-driven addition: "Predictive maintenance for equipment".
+router.post('/truck/:truckId/predict-maintenance', authenticate, async (req, res) => {
+  try {
+    const truckId = req.params.truckId;
+    const { equipment } = req.body || {};
+
+    const truck = await prisma.truck.findUnique({ where: { id: truckId } });
+    if (!truck) {
+      return res.status(404).json({ error: 'Truck not found' });
+    }
+
+    const prompt = `You are a fleet-maintenance predictor for food trucks. Given the truck details and equipment list, predict the next failure window for each item and recommend preventive actions.
+
+Truck: ${JSON.stringify(truck, null, 2)}
+
+Equipment (caller-supplied):
+${JSON.stringify(equipment || [], null, 2)}
+
+Respond with strict JSON only:
+{"items": [{"name": <string>, "failure_window": <string>, "probability": <0-1>, "recommended_action": <string>, "estimated_cost_to_prevent": <number>, "estimated_cost_if_fails": <number>}], "summary": <string>}`;
+
+    const ai = await openrouter.chat([{ role: 'user', content: prompt }], { maxTokens: 1500 });
+    let parsed = null;
+    try {
+      const match = (ai || '').match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : null;
+    } catch (_) {
+      parsed = null;
+    }
+
+    res.json({
+      truckId,
+      maintenance: parsed || { raw: ai },
+    });
+  } catch (error) {
+    console.error('Predict maintenance error:', error);
+    res.status(500).json({ error: 'Failed to predict maintenance' });
+  }
+});
+
+// Audit-driven addition: "Crew scheduling AI (fair scheduling, fatigue management, skill matching)".
+router.post('/truck/:truckId/crew-schedule', authenticate, async (req, res) => {
+  try {
+    const truckId = req.params.truckId;
+    const { crew, shifts, constraints } = req.body || {};
+
+    if (!Array.isArray(crew) || !Array.isArray(shifts)) {
+      return res.status(400).json({ error: 'crew and shifts arrays are required' });
+    }
+
+    const truck = await prisma.truck.findUnique({ where: { id: truckId } });
+    if (!truck) {
+      return res.status(404).json({ error: 'Truck not found' });
+    }
+
+    const prompt = `You are a fair-scheduling agent for a food truck crew. Assign crew members to shifts respecting constraints, balancing hours, and matching skills.
+
+Truck: ${truck.name || truckId}
+
+Crew:
+${JSON.stringify(crew, null, 2)}
+
+Shifts to fill:
+${JSON.stringify(shifts, null, 2)}
+
+Constraints:
+${JSON.stringify(constraints || {}, null, 2)}
+
+Respond with strict JSON only:
+{"assignments": [{"shift_id": <id>, "crew_id": <id>, "role": <string>, "rationale": <string>}], "fairness_score": <0-100>, "unassigned": [<shift_ids>], "warnings": [<strings>]}`;
+
+    const ai = await openrouter.chat([{ role: 'user', content: prompt }], { maxTokens: 1500 });
+    let parsed = null;
+    try {
+      const match = (ai || '').match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : null;
+    } catch (_) {
+      parsed = null;
+    }
+
+    res.json({
+      truckId,
+      schedule: parsed || { raw: ai },
+    });
+  } catch (error) {
+    console.error('Crew schedule error:', error);
+    res.status(500).json({ error: 'Failed to generate crew schedule' });
+  }
+});
+
 module.exports = router;
