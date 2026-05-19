@@ -25,6 +25,7 @@ import Settings from './pages/Settings';
 import CustomerMap from './pages/CustomerMap';
 import Analytics from './pages/Analytics';
 import PreOrder from './pages/PreOrder';
+import CustomViewsPage from './pages/CustomViewsPage';
 import Layout from './components/Layout';
 
 function ProtectedRoute({ children }) {
@@ -75,6 +76,7 @@ function AppRoutes() {
                     <Route path="/ai" element={<AI />} />
                     <Route path="/ai-advanced" element={<AIAdvanced />} />
                     <Route path="/analytics" element={<Analytics />} />
+                    <Route path="/custom-views" element={<CustomViewsPage />} />
                     <Route path="/settings" element={<Settings />} />
                   </Routes>
                 </ErrorBoundary>

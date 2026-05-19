@@ -63,6 +63,7 @@ app.use('/api/permits', permitRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/gps', gpsRoutes);
+app.use('/api/custom-views', require('./routes/customViews'));
 app.use('/api/ai/mobile-push', require('./routes/mobileNotifications')); app.use('/api/ai/vision-food-qa', require('./routes/visionFoodQA')); app.use('/api/ai/dynamic-pricing', require('./routes/dynamicPricing')); app.use('/api/ai/supplier-ordering', require('./routes/supplierOrdering')); app.use('/api/ai/crew-scheduling', require('./routes/crewScheduling')); app.use('/api/ai/voice-ordering', require('./routes/voiceOrdering')); app.use('/api/ai/loyalty', require('./routes/loyaltyAI'));
 
 // Health check

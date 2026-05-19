@@ -39,6 +39,7 @@ const navItems = [
   { path: '/permits', label: 'Permits', icon: FileText },
   { path: '/ai', label: 'AI Features', icon: Sparkles },
   { path: '/ai-advanced', label: 'AI Advanced', icon: Sparkles },
+  { path: '/custom-views', label: 'Truck Views', icon: BarChart3 },
   { path: '/settings', label: 'Settings', icon: Settings },
 
   // === Batch 10 Gaps & Frontend Mounts === nav
@@ -167,7 +168,7 @@ export default function Layout({ children }) {
                   onClick={() => setSidebarOpen(false)}
                   className={`sidebar-link ${isActive ? 'active' : ''}`}
                 >
-                  <Icon className="h-5 w-5" />
+                  {Icon ? <Icon className="h-5 w-5" /> : <span className="h-5 w-5 inline-block" />}
                   {item.label}
                 </Link>
               );
