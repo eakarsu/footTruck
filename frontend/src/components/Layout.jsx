@@ -36,6 +36,7 @@ const navItems = [
   { path: '/financial', label: 'Financial', icon: DollarSign },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/events', label: 'Events', icon: Calendar },
+  { path: '/event-prep-forecast', label: 'Event Prep Forecast', icon: Calendar },
   { path: '/permits', label: 'Permits', icon: FileText },
   { path: '/ai', label: 'AI Features', icon: Sparkles },
   { path: '/ai-advanced', label: 'AI Advanced', icon: Sparkles },

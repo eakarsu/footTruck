@@ -26,7 +26,11 @@ import CustomerMap from './pages/CustomerMap';
 import Analytics from './pages/Analytics';
 import PreOrder from './pages/PreOrder';
 import CustomViewsPage from './pages/CustomViewsPage';
+import EventPrepForecast from './pages/EventPrepForecast';
 import Layout from './components/Layout';
+
+import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
+import CodexOperationsFeature from './pages/CodexOperationsFeature';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -49,6 +53,9 @@ function ProtectedRoute({ children }) {
 function AppRoutes() {
   return (
     <Routes>
+        <Route path="/codex/custom-viz" element={<ProtectedRoute><CodexCustomVizFeature /></ProtectedRoute>} />
+        <Route path="/codex/operations" element={<ProtectedRoute><CodexOperationsFeature /></ProtectedRoute>} />
+
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -77,6 +84,7 @@ function AppRoutes() {
                     <Route path="/ai-advanced" element={<AIAdvanced />} />
                     <Route path="/analytics" element={<Analytics />} />
                     <Route path="/custom-views" element={<CustomViewsPage />} />
+                    <Route path="/event-prep-forecast" element={<EventPrepForecast />} />
                     <Route path="/settings" element={<Settings />} />
                   </Routes>
                 </ErrorBoundary>
