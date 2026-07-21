@@ -3,8 +3,7 @@ import { useTruck } from '../context/TruckContext';
 import { ordersAPI, menusAPI } from '../services/api';
 import {
   ShoppingCart, Plus, X, Clock, Check, ChefHat, Package,
-  DollarSign, User, Phone, Mail, AlertCircle, Settings, Calendar, ExternalLink,
-  Download, FileDown, CheckSquare
+  DollarSign, User, Phone, Mail, AlertCircle, Settings, Calendar, ExternalLink
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -15,20 +14,28 @@ import RowDetailModal from '../components/RowDetailModal';
 
 const statusColors = {
   PENDING: 'bg-yellow-100 text-yellow-800',
+  RESERVED: 'bg-yellow-100 text-yellow-800',
+  PAYMENT_PENDING: 'bg-purple-100 text-purple-800',
   CONFIRMED: 'bg-blue-100 text-blue-800',
   PREPARING: 'bg-orange-100 text-orange-800',
+  PARTIALLY_FULFILLED: 'bg-orange-100 text-orange-800',
   READY: 'bg-green-100 text-green-800',
   PICKED_UP: 'bg-gray-100 text-gray-800',
-  CANCELLED: 'bg-red-100 text-red-800'
+  CANCELLED: 'bg-red-100 text-red-800',
+  EXCEPTION: 'bg-red-100 text-red-800'
 };
 
 const statusIcons = {
   PENDING: Clock,
+  RESERVED: Clock,
+  PAYMENT_PENDING: Clock,
   CONFIRMED: Check,
   PREPARING: ChefHat,
+  PARTIALLY_FULFILLED: ChefHat,
   READY: Package,
   PICKED_UP: Check,
-  CANCELLED: X
+  CANCELLED: X,
+  EXCEPTION: AlertCircle
 };
 
 const orderDetailFields = [
@@ -44,15 +51,6 @@ const orderDetailFields = [
   { key: 'notes', label: 'Notes' },
   { key: 'createdAt', label: 'Created', render: (v) => v ? format(new Date(v), 'MMM d, yyyy h:mm a') : '-' }
 ];
-
-const downloadBlob = (blob, filename) => {
-  const url = URL.createObjectURL(blob.data || blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-};
 
 export default function Orders() {
   const { selectedTruck } = useTruck();
@@ -81,7 +79,6 @@ export default function Orders() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
-  const [selectedIds, setSelectedIds] = useState(new Set());
   const [showDetail, setShowDetail] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -190,9 +187,16 @@ export default function Orders() {
     }
   };
 
-  const handleUpdateStatus = async (orderId, newStatus) => {
+  const handleUpdateStatus = async (order, newStatus) => {
     try {
-      await ordersAPI.updateStatus(orderId, newStatus);
+      if (newStatus === 'READY') {
+        await ordersAPI.fulfill(order.id, order.items.map(item => ({
+          orderItemId: item.id,
+          quantity: item.quantity - (item.fulfilledQuantity || 0) - (item.cancelledQuantity || 0)
+        })).filter(item => item.quantity > 0));
+      } else {
+        await ordersAPI.updateStatus(order.id, newStatus);
+      }
       toast.success(`Order ${newStatus.toLowerCase().replace('_', ' ')}`);
       loadData();
     } catch (error) {
@@ -201,9 +205,11 @@ export default function Orders() {
   };
 
   const handleCancelOrder = async (orderId) => {
+    const reason = prompt('Cancellation reason:');
+    if (!reason) return;
     setConfirmAction(() => async () => {
       try {
-        await ordersAPI.cancel(orderId);
+        await ordersAPI.cancel(orderId, reason);
         toast.success('Order cancelled');
         loadData();
       } catch (error) {
@@ -214,14 +220,9 @@ export default function Orders() {
   };
 
   const handlePayment = async (orderId) => {
-    const tip = prompt('Enter tip amount (optional):', '0');
-    if (tip === null) return;
     try {
-      await ordersAPI.updatePayment(orderId, {
-        paymentStatus: 'COMPLETED',
-        tip: parseFloat(tip) || 0
-      });
-      toast.success('Payment recorded');
+      await ordersAPI.updatePayment(orderId, {});
+      toast.success('Payment provider response recorded');
       loadData();
     } catch (error) {
       toast.error('Failed to record payment');
@@ -259,68 +260,12 @@ export default function Orders() {
 
   const getNextStatus = (currentStatus) => {
     const flow = {
-      PENDING: 'CONFIRMED',
       CONFIRMED: 'PREPARING',
       PREPARING: 'READY',
+      PARTIALLY_FULFILLED: 'READY',
       READY: 'PICKED_UP'
     };
     return flow[currentStatus];
-  };
-
-  // Bulk operations
-  const toggleSelectOrder = (orderId) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(orderId)) {
-        next.delete(orderId);
-      } else {
-        next.add(orderId);
-      }
-      return next;
-    });
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedIds.size === orders.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(orders.map(o => o.id)));
-    }
-  };
-
-  const handleBulkDelete = () => {
-    if (selectedIds.size === 0) return;
-    setConfirmAction(() => async () => {
-      try {
-        await ordersAPI.bulkDelete(Array.from(selectedIds));
-        toast.success(`${selectedIds.size} order(s) deleted`);
-        setSelectedIds(new Set());
-        loadData();
-      } catch (error) {
-        toast.error('Failed to delete orders');
-      }
-    });
-    setShowConfirm(true);
-  };
-
-  const handleExportCSV = async () => {
-    try {
-      const res = await ordersAPI.exportCSV(selectedTruck.id);
-      downloadBlob(res, 'orders.csv');
-      toast.success('CSV exported');
-    } catch (error) {
-      toast.error('Failed to export CSV');
-    }
-  };
-
-  const handleExportPDF = async () => {
-    try {
-      const res = await ordersAPI.exportPDF(selectedTruck.id);
-      downloadBlob(res, 'orders.pdf');
-      toast.success('PDF exported');
-    } catch (error) {
-      toast.error('Failed to export PDF');
-    }
   };
 
   const handleOrderCardClick = (order, e) => {
@@ -343,7 +288,7 @@ export default function Orders() {
     setConfirmAction(null);
   };
 
-  const renderOrderCard = (order, showActions = true, showCheckbox = false) => {
+  const renderOrderCard = (order, showActions = true) => {
     const StatusIcon = statusIcons[order.status] || Clock;
     const nextStatus = getNextStatus(order.status);
 
@@ -355,14 +300,6 @@ export default function Orders() {
       >
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-start gap-2">
-            {showCheckbox && (
-              <input
-                type="checkbox"
-                checked={selectedIds.has(order.id)}
-                onChange={() => toggleSelectOrder(order.id)}
-                className="mt-1.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-            )}
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-lg">#{order.orderNumber}</span>
@@ -402,7 +339,7 @@ export default function Orders() {
           <div className="flex gap-2">
             {nextStatus && (
               <button
-                onClick={() => handleUpdateStatus(order.id, nextStatus)}
+                onClick={() => handleUpdateStatus(order, nextStatus)}
                 className="btn btn-primary flex-1"
               >
                 {nextStatus === 'CONFIRMED' && 'Confirm'}
@@ -457,15 +394,15 @@ export default function Orders() {
         </div>
         <div className="card p-4">
           <p className="text-sm text-gray-500">Today's Revenue</p>
-          <p className="text-2xl font-bold text-green-600">${(stats?.totalRevenue || 0).toFixed(2)}</p>
+          <p className="text-2xl font-bold text-green-600">${((stats?.revenueCents || 0) / 100).toFixed(2)}</p>
         </div>
         <div className="card p-4">
           <p className="text-sm text-gray-500">Avg Order Value</p>
-          <p className="text-2xl font-bold">${(stats?.averageOrderValue || 0).toFixed(2)}</p>
+          <p className="text-2xl font-bold">${((stats?.averageOrderCents || 0) / 100).toFixed(2)}</p>
         </div>
         <div className="card p-4">
           <p className="text-sm text-gray-500">In Queue</p>
-          <p className="text-2xl font-bold text-primary-600">{stats?.pendingOrders || 0}</p>
+          <p className="text-2xl font-bold text-primary-600">{Object.values(queue || {}).reduce((sum, orders) => sum + (orders?.length || 0), 0)}</p>
         </div>
       </div>
 
@@ -532,55 +469,11 @@ export default function Orders() {
             placeholder="Search orders by number, customer name, status..."
           />
 
-          {/* Toolbar */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <button
-                onClick={toggleSelectAll}
-                className="btn btn-secondary flex items-center gap-2 text-sm"
-              >
-                <CheckSquare className="h-4 w-4" />
-                {selectedIds.size === orders.length && orders.length > 0 ? 'Deselect All' : 'Select All'}
-              </button>
-              {selectedIds.size > 0 && (
-                <>
-                  <span className="text-sm text-gray-600">
-                    {selectedIds.size} selected
-                  </span>
-                  <button
-                    onClick={handleBulkDelete}
-                    className="btn btn-danger flex items-center gap-2 text-sm"
-                  >
-                    <X className="h-4 w-4" />
-                    Delete Selected
-                  </button>
-                </>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleExportCSV}
-                className="btn btn-secondary flex items-center gap-2 text-sm"
-              >
-                <Download className="h-4 w-4" />
-                CSV
-              </button>
-              <button
-                onClick={handleExportPDF}
-                className="btn btn-secondary flex items-center gap-2 text-sm"
-              >
-                <FileDown className="h-4 w-4" />
-                PDF
-              </button>
-            </div>
-          </div>
-
           {/* Order Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {orders.map(order => renderOrderCard(
               order,
-              order.status !== 'PICKED_UP' && order.status !== 'CANCELLED',
-              true
+              order.status !== 'PICKED_UP' && order.status !== 'CANCELLED'
             ))}
             {orders.length === 0 && (
               <div className="col-span-full text-center py-12">
@@ -883,12 +776,12 @@ export default function Orders() {
                       <span>${orderTotal.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm text-gray-500">
-                      <span>Tax (8%)</span>
-                      <span>${(orderTotal * 0.08).toFixed(2)}</span>
+                      <span>Tax</span>
+                      <span>Calculated by the configured tax provider</span>
                     </div>
                     <div className="flex justify-between text-xl font-bold mt-2">
                       <span>Total</span>
-                      <span className="text-primary-600">${(orderTotal * 1.08).toFixed(2)}</span>
+                      <span className="text-primary-600">Final total at authorization</span>
                     </div>
                   </div>
 

@@ -1,29 +1,34 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
+const prisma = require('../lib/prisma');
+const { sha256 } = require('../lib/canonical');
+const { requireConfig } = require('../lib/secrets');
+const { assertOrderAccess, assertTruckAccess } = require('../middleware/truckAccess');
 
 let io = null;
 
 function initializeWebSocket(server) {
+  const origins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean);
   io = new Server(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || '*',
+      origin: origins,
       methods: ['GET', 'POST']
     }
   });
 
-  // Authentication middleware for WebSocket
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth.token;
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        socket.user = decoded;
-      } catch (err) {
-        // Token invalid, but allow connection for public features
-        socket.user = null;
-      }
+    if (!token) return next();
+    try {
+      const revoked = await prisma.tokenBlacklist.findUnique({ where: { token: sha256(token) } });
+      if (revoked) throw new Error('revoked');
+      const decoded = jwt.verify(token, requireConfig('JWT_SECRET', { minimumLength: 32 }));
+      socket.user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+      if (!socket.user) throw new Error('unknown identity');
+      return next();
+    } catch {
+      return next(new Error('Invalid session'));
     }
-    next();
   });
 
   io.on('connection', (socket) => {
@@ -42,8 +47,12 @@ function initializeWebSocket(server) {
     });
 
     // Join area-based room for nearby notifications
-    socket.on('subscribe-area', (data) => {
+    socket.on('subscribe-area', (data = {}) => {
       const { latitude, longitude, radius } = data;
+      if (![latitude, longitude].every(Number.isFinite) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        socket.emit('operation-error', { code: 'INVALID_LOCATION' });
+        return;
+      }
       // Create a grid-based room name for nearby notifications
       const gridLat = Math.floor(latitude * 10) / 10;
       const gridLon = Math.floor(longitude * 10) / 10;
@@ -55,13 +64,20 @@ function initializeWebSocket(server) {
     });
 
     // Broadcast location update from truck owner
-    socket.on('broadcast-location', (data) => {
+    socket.on('broadcast-location', async (data = {}) => {
       if (!socket.user) {
-        socket.emit('error', { message: 'Authentication required' });
+        socket.emit('operation-error', { code: 'AUTHENTICATION_REQUIRED' });
         return;
       }
 
       const { truckId, latitude, longitude, heading, speed } = data;
+      try {
+        await assertTruckAccess(socket.user, truckId, 'OPERATOR');
+        if (![latitude, longitude].every(Number.isFinite) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) throw new Error('invalid location');
+      } catch {
+        socket.emit('operation-error', { code: 'LOCATION_BROADCAST_DENIED' });
+        return;
+      }
 
       // Emit to all clients subscribed to this truck
       io.to(`truck-${truckId}`).emit('location-update', {
@@ -91,8 +107,19 @@ function initializeWebSocket(server) {
     });
 
     // Handle order status updates
-    socket.on('join-order', (orderNumber) => {
-      socket.join(`order-${orderNumber}`);
+    socket.on('join-order', async (orderNumber) => {
+      if (!socket.user || typeof orderNumber !== 'string') {
+        socket.emit('operation-error', { code: 'ORDER_SUBSCRIPTION_DENIED' });
+        return;
+      }
+      try {
+        const order = await prisma.order.findUnique({ where: { orderNumber }, select: { id: true } });
+        if (!order) throw new Error('not found');
+        await assertOrderAccess(socket.user, order.id, 'VIEWER');
+        socket.join(`order-${orderNumber}`);
+      } catch {
+        socket.emit('operation-error', { code: 'ORDER_SUBSCRIPTION_DENIED' });
+      }
     });
 
     socket.on('leave-order', (orderNumber) => {

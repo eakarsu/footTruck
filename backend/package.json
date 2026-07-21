@@ -1,18 +1,25 @@
 {
   "name": "food-truck-backend",
   "version": "1.0.0",
-  "description": "Food Truck AI Platform Backend",
+  "description": "Food Truck Operations Backend",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
+    "lint": "node scripts/check-source.js",
+    "test": "node --test --test-concurrency=1 test/**/*.test.js",
+    "test:unit": "node --test --test-concurrency=1 test/unit/**/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 test/integration/**/*.test.js",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "node prisma/seed.js"
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "create-admin": "node scripts/create-admin.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
-    "axios": "^1.16.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -22,13 +29,9 @@
     "helmet": "^8.1.0",
     "json2csv": "^6.0.0-alpha.2",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
-    "node-cron": "^4.2.1",
-    "nodemailer": "^8.0.1",
-    "openai": "^4.20.1",
+    "nodemailer": "^9.0.3",
     "pdfkit": "^0.17.2",
-    "socket.io": "^4.8.3",
-    "uuid": "^9.0.1"
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2",

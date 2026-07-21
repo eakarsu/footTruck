@@ -8,7 +8,6 @@ import {
   MapPin,
   AlertTriangle,
   Calendar,
-  Sparkles,
   TrendingUp,
   Clock,
   Package,
@@ -226,36 +225,6 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
-      {/* AI Recommendations */}
-      {data?.aiRecommendations?.length > 0 && (
-        <div className="card">
-          <div className="p-6 border-b border-gray-200">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary-600" />
-              <h2 className="text-lg font-semibold text-gray-900">AI Recommendations</h2>
-            </div>
-          </div>
-          <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {data.aiRecommendations.map(rec => (
-                <div key={rec.id} className="p-4 bg-gradient-to-br from-primary-50 to-white rounded-lg border border-primary-100">
-                  <span className="inline-block px-2 py-1 text-xs font-medium bg-primary-100 text-primary-700 rounded-full mb-2">
-                    {rec.type}
-                  </span>
-                  <h3 className="font-medium text-gray-900 mb-1">{rec.title}</h3>
-                  <p className="text-sm text-gray-600">{rec.description}</p>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 text-center">
-              <Link to="/ai" className="text-primary-600 hover:text-primary-700 font-medium">
-                View all AI insights
-              </Link>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Alerts */}
       {(data?.alerts?.lowStockCount > 0 || data?.alerts?.expiringPermitsCount > 0) && (

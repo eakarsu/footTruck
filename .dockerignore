@@ -1,0 +1,9 @@
+.git
+.env
+**/node_modules
+**/dist
+**/coverage
+*.log
+test.txt
+_AUDIT_NOTE.md
+_COMPLETENESS_REVIEW.md

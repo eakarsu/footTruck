@@ -2,17 +2,29 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const { validateRegister, validateLogin, validatePasswordReset, validateNewPassword, validatePasswordChange } = require('../middleware/validate');
+const prisma = require('../lib/prisma');
+const { requireConfig } = require('../lib/secrets');
+const { sha256 } = require('../lib/canonical');
+const { sendTransactionalEmail } = require('../services/emailProvider');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+function issueToken(userId) {
+  return jwt.sign({ userId }, requireConfig('JWT_SECRET', { minimumLength: 32 }), { expiresIn: '7d' });
+}
+
+function appUrl(pathname, token) {
+  const base = new URL(requireConfig('APP_BASE_URL'));
+  base.pathname = pathname;
+  base.searchParams.set('token', token);
+  return base.toString();
+}
 
 // Register
 router.post('/register', validateRegister, async (req, res) => {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name } = req.body;
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
@@ -26,7 +38,7 @@ router.post('/register', validateRegister, async (req, res) => {
         email,
         password: hashedPassword,
         name,
-        role: role || 'OWNER',
+        role: 'OWNER',
         emailVerified: false
       }
     });
@@ -35,17 +47,18 @@ router.post('/register', validateRegister, async (req, res) => {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     await prisma.emailVerification.create({
       data: {
-        token: verificationToken,
+        token: sha256(verificationToken),
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
         userId: user.id
       }
     });
 
-    const token = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    await sendTransactionalEmail({
+      to: user.email,
+      subject: 'Verify your food truck operations account',
+      text: `Verify your email using this link: ${appUrl('/verify-email', verificationToken)}`,
+    });
+    const token = issueToken(user.id);
 
     res.status(201).json({
       user: {
@@ -56,7 +69,6 @@ router.post('/register', validateRegister, async (req, res) => {
         emailVerified: user.emailVerified
       },
       token,
-      verificationToken,
       message: 'Registration successful. Please verify your email.'
     });
   } catch (error) {
@@ -80,11 +92,7 @@ router.post('/login', validateLogin, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const token = issueToken(user.id);
 
     res.json({
       user: {
@@ -110,7 +118,7 @@ router.post('/logout', authenticate, async (req, res) => {
 
     await prisma.tokenBlacklist.create({
       data: {
-        token,
+        token: sha256(token),
         expiresAt: new Date(decoded.exp * 1000)
       }
     });
@@ -136,18 +144,18 @@ router.post('/password-reset/request', validatePasswordReset, async (req, res) =
     const resetToken = crypto.randomBytes(32).toString('hex');
     await prisma.passwordReset.create({
       data: {
-        token: resetToken,
+        token: sha256(resetToken),
         expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
         userId: user.id
       }
     });
 
-    // In production, send email with reset link
-    // For now, return the token (dev mode)
-    res.json({
-      message: 'If an account with that email exists, a reset link has been sent.',
-      resetToken // Remove in production
+    await sendTransactionalEmail({
+      to: user.email,
+      subject: 'Reset your food truck operations password',
+      text: `Reset your password using this link: ${appUrl('/reset-password', resetToken)}`,
     });
+    res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
   } catch (error) {
     console.error('Password reset request error:', error);
     res.status(500).json({ error: 'Failed to process password reset request' });
@@ -160,7 +168,7 @@ router.post('/password-reset/confirm', validateNewPassword, async (req, res) => 
     const { token, password } = req.body;
 
     const resetRecord = await prisma.passwordReset.findUnique({
-      where: { token },
+      where: { token: sha256(token) },
       include: { user: true }
     });
 
@@ -194,7 +202,7 @@ router.post('/verify-email', async (req, res) => {
     const { token } = req.body;
 
     const verification = await prisma.emailVerification.findUnique({
-      where: { token },
+      where: { token: sha256(token) },
       include: { user: true }
     });
 
@@ -230,16 +238,18 @@ router.post('/resend-verification', authenticate, async (req, res) => {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     await prisma.emailVerification.create({
       data: {
-        token: verificationToken,
+        token: sha256(verificationToken),
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         userId: req.user.id
       }
     });
 
-    res.json({
-      message: 'Verification email sent.',
-      verificationToken // Remove in production
+    await sendTransactionalEmail({
+      to: req.user.email,
+      subject: 'Verify your food truck operations account',
+      text: `Verify your email using this link: ${appUrl('/verify-email', verificationToken)}`,
     });
+    res.json({ message: 'Verification email sent.' });
   } catch (error) {
     console.error('Resend verification error:', error);
     res.status(500).json({ error: 'Failed to resend verification email' });

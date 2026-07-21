@@ -9,20 +9,24 @@ datasource db {
 
 // ==================== USER & AUTH ====================
 model User {
-  id              String    @id @default(uuid())
-  email           String    @unique
-  password        String
-  name            String
-  role            UserRole  @default(OWNER)
-  emailVerified   Boolean   @default(false)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password      String
+  name          String
+  role          UserRole @default(OWNER)
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  trucks          Truck[]
-  orders          Order[]
-  notifications   Notification[]
-  passwordResets  PasswordReset[]
+  trucks             Truck[]
+  orders             Order[]
+  notifications      Notification[]
+  passwordResets     PasswordReset[]
   emailVerifications EmailVerification[]
+  truckMemberships   TruckMembership[]
+  orderEvents        OrderEvent[]        @relation("OrderEventActor")
+  requestedRefunds   Refund[]            @relation("RefundRequester")
+  inventoryMovements InventoryMovement[] @relation("InventoryMovementActor")
 }
 
 enum UserRole {
@@ -38,8 +42,8 @@ model PasswordReset {
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model EmailVerification {
@@ -49,8 +53,8 @@ model EmailVerification {
   used      Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model TokenBlacklist {
@@ -62,63 +66,87 @@ model TokenBlacklist {
 
 // ==================== TRUCK ====================
 model Truck {
-  id            String    @id @default(uuid())
-  name          String
-  description   String?
-  phone         String?
-  email         String?
-  logo          String?
-  coverImage    String?
-  cuisineType   String?
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  phone       String?
+  email       String?
+  logo        String?
+  coverImage  String?
+  cuisineType String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  ownerId       String
-  owner         User      @relation(fields: [ownerId], references: [id])
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id])
 
-  locations     TruckLocation[]
-  menus         Menu[]
-  orders        Order[]
-  inventory     InventoryItem[]
-  prepLists     PrepList[]
-  supplies      Supply[]
-  socialPosts   SocialPost[]
-  sales         Sale[]
-  expenses      Expense[]
-  permits       Permit[]
-  events        EventRegistration[]
+  locations         TruckLocation[]
+  menus             Menu[]
+  orders            Order[]
+  inventory         InventoryItem[]
+  prepLists         PrepList[]
+  supplies          Supply[]
+  socialPosts       SocialPost[]
+  sales             Sale[]
+  expenses          Expense[]
+  permits           Permit[]
+  events            EventRegistration[]
   aiRecommendations AIRecommendation[]
-  liveLocation  TruckLiveLocation?
+  liveLocation      TruckLiveLocation?
   demandPredictions DemandPrediction[]
-  socialTemplates SocialTemplate[]
-  autoPostRules AutoPostRule[]
-  socialAccounts SocialAccount[]
-  preOrderSettings PreOrderSettings?
+  socialTemplates   SocialTemplate[]
+  autoPostRules     AutoPostRule[]
+  socialAccounts    SocialAccount[]
+  preOrderSettings  PreOrderSettings?
   locationAnalytics LocationAnalytics[]
-  locationGoals LocationGoal[]
+  locationGoals     LocationGoal[]
+  memberships       TruckMembership[]
+  providerEvents    OrderProviderEvent[]
+}
+
+model TruckMembership {
+  id        String          @id @default(uuid())
+  role      TruckMemberRole
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId  String
+
+  @@unique([truckId, userId])
+  @@index([userId, isActive])
+}
+
+enum TruckMemberRole {
+  MANAGER
+  OPERATOR
+  VIEWER
 }
 
 // ==================== LOCATION MANAGEMENT ====================
 model Location {
-  id            String    @id @default(uuid())
-  name          String
-  address       String
-  city          String
-  state         String
-  zipCode       String
-  latitude      Float?
-  longitude     Float?
-  type          LocationType @default(STREET)
-  notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String       @id @default(uuid())
+  name      String
+  address   String
+  city      String
+  state     String
+  zipCode   String
+  latitude  Float?
+  longitude Float?
+  type      LocationType @default(STREET)
+  notes     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
 
-  truckLocations TruckLocation[]
-  events        Event[]
+  truckLocations    TruckLocation[]
+  events            Event[]
   demandPredictions DemandPrediction[]
   locationAnalytics LocationAnalytics[]
-  locationGoals LocationGoal[]
+  locationGoals     LocationGoal[]
 }
 
 enum LocationType {
@@ -131,7 +159,7 @@ enum LocationType {
 }
 
 model TruckLocation {
-  id            String    @id @default(uuid())
+  id            String        @id @default(uuid())
   date          DateTime
   startTime     String
   endTime       String
@@ -139,13 +167,13 @@ model TruckLocation {
   revenue       Float?
   customerCount Int?
   notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  locationId    String
-  location      Location  @relation(fields: [locationId], references: [id])
+  truckId         String
+  truck           Truck            @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  locationId      String
+  location        Location         @relation(fields: [locationId], references: [id])
   preOrderWindows PreOrderWindow[]
 }
 
@@ -158,21 +186,21 @@ enum BookingStatus {
 }
 
 model Permit {
-  id            String    @id @default(uuid())
-  permitNumber  String
-  type          PermitType
+  id               String       @id @default(uuid())
+  permitNumber     String
+  type             PermitType
   issuingAuthority String
-  issueDate     DateTime
-  expiryDate    DateTime
-  cost          Float?
-  status        PermitStatus @default(ACTIVE)
-  notes         String?
-  documentUrl   String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  issueDate        DateTime
+  expiryDate       DateTime
+  cost             Float?
+  status           PermitStatus @default(ACTIVE)
+  notes            String?
+  documentUrl      String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 enum PermitType {
@@ -192,21 +220,21 @@ enum PermitStatus {
 }
 
 model Event {
-  id            String    @id @default(uuid())
-  name          String
-  description   String?
-  startDate     DateTime
-  endDate       DateTime
-  venueAddress  String?
-  expectedAttendance Int?
-  vendorFee     Float?
+  id                  String      @id @default(uuid())
+  name                String
+  description         String?
+  startDate           DateTime
+  endDate             DateTime
+  venueAddress        String?
+  expectedAttendance  Int?
+  vendorFee           Float?
   applicationDeadline DateTime?
-  status        EventStatus @default(UPCOMING)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  status              EventStatus @default(UPCOMING)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
-  locationId    String?
-  location      Location? @relation(fields: [locationId], references: [id])
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
 
   registrations EventRegistration[]
   booths        EventBooth[]
@@ -221,23 +249,23 @@ enum EventStatus {
 }
 
 model EventRegistration {
-  id            String    @id @default(uuid())
+  id            String             @id @default(uuid())
   status        RegistrationStatus @default(PENDING)
   boothNumber   String?
   notes         String?
-  paymentStatus String?   @default("PENDING")
+  paymentStatus String?            @default("PENDING")
   paymentAmount Float?
   documents     Json?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  eventId       String
-  event         Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  boothId       String?   @unique
-  booth         EventBooth? @relation(fields: [boothId], references: [id])
-  timeline      EventTimeline[]
+  truckId  String
+  truck    Truck           @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  eventId  String
+  event    Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  boothId  String?         @unique
+  booth    EventBooth?     @relation(fields: [boothId], references: [id])
+  timeline EventTimeline[]
 }
 
 enum RegistrationStatus {
@@ -249,99 +277,146 @@ enum RegistrationStatus {
 
 // ==================== MENU MANAGEMENT ====================
 model Menu {
-  id            String    @id @default(uuid())
-  name          String
-  description   String?
-  isActive      Boolean   @default(true)
-  isDefault     Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 
-  categories    MenuCategory[]
+  categories MenuCategory[]
 }
 
 model MenuCategory {
-  id            String    @id @default(uuid())
-  name          String
-  description   String?
-  sortOrder     Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  menuId        String
-  menu          Menu      @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  menuId String
+  menu   Menu   @relation(fields: [menuId], references: [id], onDelete: Cascade)
 
-  items         MenuItem[]
+  items MenuItem[]
 }
 
 model MenuItem {
-  id            String    @id @default(uuid())
-  name          String
-  description   String?
-  price         Float
-  image         String?
-  isAvailable   Boolean   @default(true)
-  isSoldOut     Boolean   @default(false)
-  isSpecial     Boolean   @default(false)
-  specialPrice  Float?
-  calories      Int?
-  allergens     String[]
-  tags          String[]
-  prepTime      Int?
-  sortOrder     Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String   @id @default(uuid())
+  name         String
+  description  String?
+  price        Float
+  image        String?
+  isAvailable  Boolean  @default(true)
+  isSoldOut    Boolean  @default(false)
+  isSpecial    Boolean  @default(false)
+  specialPrice Float?
+  calories     Int?
+  allergens    String[]
+  tags         String[]
+  prepTime     Int?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  categoryId    String
-  category      MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  orderItems    OrderItem[]
+  orderItems  OrderItem[]
+  ingredients MenuItemIngredient[]
+}
+
+model MenuItemIngredient {
+  id              String @id @default(uuid())
+  quantityPerItem Float
+
+  menuItem        MenuItem      @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  menuItemId      String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryItemId String
+
+  @@unique([menuItemId, inventoryItemId])
+  @@index([inventoryItemId])
 }
 
 // ==================== ORDER MANAGEMENT ====================
 model Order {
-  id            String    @id @default(uuid())
-  orderNumber   String    @unique
-  status        OrderStatus @default(PENDING)
-  type          OrderType @default(WALK_IN)
-  customerName  String?
-  customerPhone String?
-  customerEmail String?
-  subtotal      Float
-  tax           Float
-  tip           Float     @default(0)
-  total         Float
-  paymentMethod PaymentMethod?
-  paymentStatus PaymentStatus @default(PENDING)
-  notes         String?
-  estimatedReadyTime DateTime?
-  actualReadyTime DateTime?
-  scheduledPickup DateTime?
-  reminderSent  Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                      String            @id @default(uuid())
+  orderNumber             String            @unique
+  status                  OrderStatus       @default(PENDING)
+  type                    OrderType         @default(WALK_IN)
+  customerName            String?
+  customerPhone           String?
+  customerEmail           String?
+  subtotal                Float
+  tax                     Float
+  tip                     Float             @default(0)
+  total                   Float
+  paymentMethod           PaymentMethod?
+  paymentStatus           PaymentStatus     @default(PENDING)
+  reservationStatus       ReservationStatus @default(PENDING)
+  fulfillmentStatus       FulfillmentStatus @default(UNFULFILLED)
+  currency                String            @default("USD")
+  subtotalCents           Int
+  taxCents                Int
+  tipCents                Int               @default(0)
+  totalCents              Int
+  refundedCents           Int               @default(0)
+  requestDigest           String
+  idempotencyKey          String            @unique
+  customerAccessTokenHash String?           @unique
+  version                 Int               @default(1)
+  reservationExpiresAt    DateTime?
+  paymentProvider         String?
+  paymentIntentId         String?
+  deliveryProvider        String?
+  deliveryId              String?
+  cancelledAt             DateTime?
+  cancellationReason      String?
+  exceptionCode           String?
+  exceptionMessage        String?
+  exceptionFromStatus     OrderStatus?
+  notes                   String?
+  estimatedReadyTime      DateTime?
+  actualReadyTime         DateTime?
+  scheduledPickup         DateTime?
+  reminderSent            Boolean           @default(false)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
-  userId        String?
-  user          User?     @relation(fields: [userId], references: [id])
+  truckId        String
+  truck          Truck           @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?           @relation(fields: [userId], references: [id])
   pickupWindowId String?
-  pickupWindow  PreOrderWindow? @relation(fields: [pickupWindowId], references: [id])
+  pickupWindow   PreOrderWindow? @relation(fields: [pickupWindowId], references: [id])
 
-  items         OrderItem[]
-  notifications OrderNotification[]
+  items                 OrderItem[]
+  notifications         OrderNotification[]
+  events                OrderEvent[]
+  refunds               Refund[]
+  inventoryReservations InventoryReservation[]
+  providerEvents        OrderProviderEvent[]
+
+  @@index([truckId, status, createdAt])
+  @@index([paymentProvider, paymentIntentId])
 }
 
 enum OrderStatus {
   PENDING
+  RESERVED
+  PAYMENT_PENDING
   CONFIRMED
   PREPARING
+  PARTIALLY_FULFILLED
   READY
   PICKED_UP
   CANCELLED
+  EXCEPTION
 }
 
 enum OrderType {
@@ -361,33 +436,171 @@ enum PaymentMethod {
 
 enum PaymentStatus {
   PENDING
+  REQUIRES_ACTION
+  AUTHORIZED
   COMPLETED
   FAILED
+  PARTIALLY_REFUNDED
   REFUNDED
 }
 
-model OrderItem {
-  id            String    @id @default(uuid())
-  quantity      Int
-  unitPrice     Float
-  totalPrice    Float
-  specialInstructions String?
-  createdAt     DateTime  @default(now())
+enum ReservationStatus {
+  PENDING
+  RESERVED
+  RELEASED
+  EXPIRED
+  FAILED
+}
 
+enum FulfillmentStatus {
+  UNFULFILLED
+  PARTIAL
+  FULFILLED
+  CANCELLED
+}
+
+model OrderItem {
+  id                  String   @id @default(uuid())
+  quantity            Int
+  unitPrice           Float
+  totalPrice          Float
+  specialInstructions String?
+  fulfilledQuantity   Int      @default(0)
+  cancelledQuantity   Int      @default(0)
+  createdAt           DateTime @default(now())
+
+  orderId               String
+  order                 Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId            String
+  menuItem              MenuItem               @relation(fields: [menuItemId], references: [id])
+  inventoryReservations InventoryReservation[]
+}
+
+model InventoryReservation {
+  id         String                     @id @default(uuid())
+  quantity   Float
+  status     InventoryReservationStatus @default(RESERVED)
+  releasedAt DateTime?
+  createdAt  DateTime                   @default(now())
+
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId         String
+  orderItem       OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  orderItemId     String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryItemId String
+
+  @@unique([orderItemId, inventoryItemId])
+  @@index([orderId, status])
+  @@index([inventoryItemId, status])
+}
+
+enum InventoryReservationStatus {
+  RESERVED
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+model Refund {
+  id                    String       @id @default(uuid())
+  amountCents           Int
+  reason                String
+  status                RefundStatus @default(REQUESTED)
+  idempotencyKey        String       @unique
+  provider              String?
+  providerRefundId      String?
+  providerEventId       String?
+  providerPayloadDigest String?
+  failureCode           String?
+  failureReason         String?
+  createdAt             DateTime     @default(now())
+  completedAt           DateTime?
+
+  order         Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
   orderId       String
-  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  menuItemId    String
-  menuItem      MenuItem  @relation(fields: [menuItemId], references: [id])
+  requestedBy   User?   @relation("RefundRequester", fields: [requestedById], references: [id])
+  requestedById String?
+
+  @@unique([provider, providerRefundId])
+  @@index([orderId, status])
+}
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model OrderEvent {
+  id                    String             @id @default(uuid())
+  sequence              BigInt
+  eventType             String
+  source                String
+  actorRole             String?
+  fromStatus            OrderStatus?
+  toStatus              OrderStatus?
+  fromPaymentStatus     PaymentStatus?
+  toPaymentStatus       PaymentStatus?
+  fromFulfillmentStatus FulfillmentStatus?
+  toFulfillmentStatus   FulfillmentStatus?
+  idempotencyKey        String
+  requestId             String
+  previousHash          String?
+  eventHash             String             @unique
+  data                  Json?
+  createdAt             DateTime           @default(now())
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId String
+  actor   User?   @relation("OrderEventActor", fields: [actorId], references: [id])
+  actorId String?
+
+  @@unique([orderId, sequence])
+  @@unique([orderId, idempotencyKey])
+  @@index([orderId, createdAt])
+}
+
+model OrderProviderEvent {
+  id              String                 @id @default(uuid())
+  provider        String
+  providerEventId String
+  direction       ProviderEventDirection
+  operation       String
+  status          String
+  sourceTimestamp DateTime
+  sourceOrderRef  String
+  payloadDigest   String
+  idempotencyKey  String
+  result          Json
+  processedAt     DateTime?
+  createdAt       DateTime               @default(now())
+
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Restrict)
+  truckId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId String
+
+  @@unique([provider, providerEventId])
+  @@unique([provider, idempotencyKey])
+  @@index([orderId, operation, createdAt])
+}
+
+enum ProviderEventDirection {
+  OUTBOUND_RESULT
+  INBOUND_WEBHOOK
+  RECONCILIATION
 }
 
 model OrderNotification {
-  id            String    @id @default(uuid())
-  type          NotificationType
-  message       String
-  sentAt        DateTime  @default(now())
+  id      String           @id @default(uuid())
+  type    NotificationType
+  message String
+  sentAt  DateTime         @default(now())
 
-  orderId       String
-  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 }
 
 enum NotificationType {
@@ -395,11 +608,13 @@ enum NotificationType {
   ORDER_PREPARING
   ORDER_READY
   ORDER_PICKED_UP
+  PICKUP_REMINDER
+  ORDER_CANCELLED
 }
 
 // ==================== INVENTORY ====================
 model InventoryItem {
-  id            String    @id @default(uuid())
+  id            String            @id @default(uuid())
   name          String
   category      InventoryCategory
   quantity      Float
@@ -411,13 +626,34 @@ model InventoryItem {
   lastRestocked DateTime?
   expiryDate    DateTime?
   notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 
-  wasteRecords  WasteRecord[]
+  wasteRecords WasteRecord[]
+  ingredients  MenuItemIngredient[]
+  reservations InventoryReservation[]
+  movements    InventoryMovement[]
+}
+
+model InventoryMovement {
+  id             String   @id @default(uuid())
+  quantityDelta  Float
+  balanceAfter   Float
+  reason         String
+  referenceType  String
+  referenceId    String
+  idempotencyKey String   @unique
+  createdAt      DateTime @default(now())
+
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  inventoryItemId String
+  actor           User?         @relation("InventoryMovementActor", fields: [actorId], references: [id])
+  actorId         String?
+
+  @@index([inventoryItemId, createdAt])
 }
 
 enum InventoryCategory {
@@ -433,17 +669,17 @@ enum InventoryCategory {
 }
 
 model PrepList {
-  id            String    @id @default(uuid())
-  date          DateTime
-  status        PrepStatus @default(PENDING)
-  notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id        String     @id @default(uuid())
+  date      DateTime
+  status    PrepStatus @default(PENDING)
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 
-  items         PrepItem[]
+  items PrepItem[]
 }
 
 enum PrepStatus {
@@ -453,38 +689,38 @@ enum PrepStatus {
 }
 
 model PrepItem {
-  id            String    @id @default(uuid())
-  name          String
-  quantity      Float
-  unit          String
-  isCompleted   Boolean   @default(false)
-  completedBy   String?
-  completedAt   DateTime?
-  notes         String?
+  id          String    @id @default(uuid())
+  name        String
+  quantity    Float
+  unit        String
+  isCompleted Boolean   @default(false)
+  completedBy String?
+  completedAt DateTime?
+  notes       String?
 
-  prepListId    String
-  prepList      PrepList  @relation(fields: [prepListId], references: [id], onDelete: Cascade)
+  prepListId String
+  prepList   PrepList @relation(fields: [prepListId], references: [id], onDelete: Cascade)
 }
 
 model Supply {
-  id            String    @id @default(uuid())
-  name          String
-  category      InventoryCategory
-  quantity      Float
-  unit          String
-  unitCost      Float
-  totalCost     Float
-  supplier      String
-  orderDate     DateTime
+  id               String            @id @default(uuid())
+  name             String
+  category         InventoryCategory
+  quantity         Float
+  unit             String
+  unitCost         Float
+  totalCost        Float
+  supplier         String
+  orderDate        DateTime
   expectedDelivery DateTime?
-  actualDelivery DateTime?
-  status        SupplyStatus @default(ORDERED)
-  notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  actualDelivery   DateTime?
+  status           SupplyStatus      @default(ORDERED)
+  notes            String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 enum SupplyStatus {
@@ -495,16 +731,16 @@ enum SupplyStatus {
 }
 
 model WasteRecord {
-  id            String    @id @default(uuid())
-  quantity      Float
-  unit          String
-  reason        WasteReason
-  cost          Float?
-  notes         String?
-  recordedAt    DateTime  @default(now())
+  id         String      @id @default(uuid())
+  quantity   Float
+  unit       String
+  reason     WasteReason
+  cost       Float?
+  notes      String?
+  recordedAt DateTime    @default(now())
 
   inventoryItemId String
-  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
 }
 
 enum WasteReason {
@@ -518,24 +754,24 @@ enum WasteReason {
 
 // ==================== SOCIAL MEDIA ====================
 model SocialPost {
-  id            String    @id @default(uuid())
+  id            String         @id @default(uuid())
   platform      SocialPlatform
   content       String
   imageUrl      String?
   scheduledFor  DateTime?
   postedAt      DateTime?
-  status        PostStatus @default(DRAFT)
+  status        PostStatus     @default(DRAFT)
   type          PostType
-  likes         Int       @default(0)
-  comments      Int       @default(0)
-  shares        Int       @default(0)
-  reach         Int       @default(0)
-  isAIGenerated Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  likes         Int            @default(0)
+  comments      Int            @default(0)
+  shares        Int            @default(0)
+  reach         Int            @default(0)
+  isAIGenerated Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 enum SocialPlatform {
@@ -563,24 +799,24 @@ enum PostType {
 
 // ==================== FINANCIAL ====================
 model Sale {
-  id            String    @id @default(uuid())
-  date          DateTime
-  cashSales     Float     @default(0)
-  cardSales     Float     @default(0)
-  mobileSales   Float     @default(0)
-  totalSales    Float
+  id               String   @id @default(uuid())
+  date             DateTime
+  cashSales        Float    @default(0)
+  cardSales        Float    @default(0)
+  mobileSales      Float    @default(0)
+  totalSales       Float
   transactionCount Int
-  averageTicket Float
-  notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  averageTicket    Float
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 model Expense {
-  id            String    @id @default(uuid())
+  id            String          @id @default(uuid())
   date          DateTime
   category      ExpenseCategory
   description   String
@@ -588,13 +824,13 @@ model Expense {
   paymentMethod PaymentMethod?
   vendor        String?
   receiptUrl    String?
-  isRecurring   Boolean   @default(false)
+  isRecurring   Boolean         @default(false)
   notes         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 enum ExpenseCategory {
@@ -613,18 +849,18 @@ enum ExpenseCategory {
 
 // ==================== AI FEATURES ====================
 model AIRecommendation {
-  id            String    @id @default(uuid())
-  type          AIRecommendationType
-  title         String
-  description   String
-  data          Json?
-  confidence    Float?
-  isActioned    Boolean   @default(false)
-  actionedAt    DateTime?
-  createdAt     DateTime  @default(now())
+  id          String               @id @default(uuid())
+  type        AIRecommendationType
+  title       String
+  description String
+  data        Json?
+  confidence  Float?
+  isActioned  Boolean              @default(false)
+  actionedAt  DateTime?
+  createdAt   DateTime             @default(now())
 
-  truckId       String
-  truck         Truck     @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truckId String
+  truck   Truck  @relation(fields: [truckId], references: [id], onDelete: Cascade)
 }
 
 enum AIRecommendationType {
@@ -639,15 +875,15 @@ enum AIRecommendationType {
 
 // ==================== NOTIFICATIONS ====================
 model Notification {
-  id            String    @id @default(uuid())
-  title         String
-  message       String
-  type          String
-  isRead        Boolean   @default(false)
-  createdAt     DateTime  @default(now())
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  type      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
 
-  userId        String
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ==================== GPS LOCATION BROADCASTING ====================
@@ -685,6 +921,7 @@ model WeatherCache {
   conditions  String
   humidity    Int
   fetchedAt   DateTime @default(now())
+
   @@unique([latitude, longitude, date])
 }
 
@@ -705,28 +942,28 @@ model DemandPrediction {
 
 // ==================== SOCIAL MEDIA AUTO-POST ====================
 model SocialTemplate {
-  id        String   @id @default(uuid())
-  name      String
-  type      PostType
-  template  String
-  platforms SocialPlatform[]
-  isDefault Boolean  @default(false)
-  isActive  Boolean  @default(true)
-  truckId   String
-  truck     Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  id            String           @id @default(uuid())
+  name          String
+  type          PostType
+  template      String
+  platforms     SocialPlatform[]
+  isDefault     Boolean          @default(false)
+  isActive      Boolean          @default(true)
+  truckId       String
+  truck         Truck            @relation(fields: [truckId], references: [id], onDelete: Cascade)
   autoPostRules AutoPostRule[]
 }
 
 model AutoPostRule {
-  id           String          @id @default(uuid())
+  id           String           @id @default(uuid())
   triggerType  AutoPostTrigger
   platforms    SocialPlatform[]
-  isActive     Boolean         @default(true)
-  delayMinutes Int             @default(0)
+  isActive     Boolean          @default(true)
+  delayMinutes Int              @default(0)
   truckId      String
-  truck        Truck           @relation(fields: [truckId], references: [id], onDelete: Cascade)
+  truck        Truck            @relation(fields: [truckId], references: [id], onDelete: Cascade)
   templateId   String?
-  template     SocialTemplate? @relation(fields: [templateId], references: [id])
+  template     SocialTemplate?  @relation(fields: [templateId], references: [id])
 }
 
 enum AutoPostTrigger {
@@ -746,6 +983,7 @@ model SocialAccount {
   isConnected  Boolean        @default(true)
   truckId      String
   truck        Truck          @relation(fields: [truckId], references: [id], onDelete: Cascade)
+
   @@unique([truckId, platform])
 }
 
@@ -761,6 +999,7 @@ model PreOrderWindow {
   truckLocationId String
   truckLocation   TruckLocation @relation(fields: [truckLocationId], references: [id], onDelete: Cascade)
   orders          Order[]
+
   @@unique([truckLocationId, date, slotStart])
 }
 
@@ -840,6 +1079,7 @@ model LocationAnalytics {
   truck              Truck    @relation(fields: [truckId], references: [id], onDelete: Cascade)
   locationId         String
   location           Location @relation(fields: [locationId], references: [id])
+
   @@unique([truckId, locationId, date])
 }
 

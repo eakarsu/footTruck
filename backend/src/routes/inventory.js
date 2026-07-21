@@ -1,12 +1,83 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const prisma = require('../lib/prisma');
+const { assertTruckAccess } = require('../middleware/truckAccess');
 const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
 const { sendCSV, sendPDF } = require('../utils/exportHelpers');
 const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+
+async function scopedTruckIds(req) {
+  const ids = new Set();
+  const truckMatch = req.path.match(/^\/truck\/([^/]+)/);
+  if (truckMatch) ids.add(truckMatch[1]);
+  if (req.body?.truckId) ids.add(req.body.truckId);
+  const itemMatch = req.path.match(/^\/item\/([^/]+)/);
+  if (itemMatch) {
+    const item = await prisma.inventoryItem.findUnique({ where: { id: itemMatch[1] }, select: { truckId: true } });
+    if (item) ids.add(item.truckId);
+  }
+  const recipeMatch = req.path.match(/^\/menu-items\/([^/]+)\/recipe/);
+  if (recipeMatch) {
+    const menuItem = await prisma.menuItem.findUnique({ where: { id: recipeMatch[1] }, select: { category: { select: { menu: { select: { truckId: true } } } } } });
+    if (menuItem) ids.add(menuItem.category.menu.truckId);
+  }
+  if (req.body?.inventoryItemId) {
+    const item = await prisma.inventoryItem.findUnique({ where: { id: req.body.inventoryItemId }, select: { truckId: true } });
+    if (item) ids.add(item.truckId);
+  }
+  if (Array.isArray(req.body?.ids) && req.path.startsWith('/bulk-')) {
+    const items = await prisma.inventoryItem.findMany({ where: { id: { in: req.body.ids } }, select: { truckId: true } });
+    items.forEach((item) => ids.add(item.truckId));
+    if (items.length !== req.body.ids.length) throw Object.assign(new Error('Inventory selection contains unknown items'), { status: 404 });
+  }
+  return [...ids];
+}
+
+router.use(async (req, _res, next) => {
+  try {
+    const truckIds = await scopedTruckIds(req);
+    if (truckIds.length === 0) return next();
+    const required = req.method === 'GET' ? 'VIEWER' : req.method === 'DELETE' ? 'MANAGER' : 'OPERATOR';
+    for (const truckId of truckIds) await assertTruckAccess(req.user, truckId, required);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/menu-items/:menuItemId/recipe', async (req, res, next) => {
+  try {
+    const ingredients = await prisma.menuItemIngredient.findMany({
+      where: { menuItemId: req.params.menuItemId }, include: { inventoryItem: true }, orderBy: { inventoryItem: { name: 'asc' } },
+    });
+    res.json(ingredients);
+  } catch (error) { next(error); }
+});
+
+router.put('/menu-items/:menuItemId/recipe', async (req, res, next) => {
+  try {
+    if (!Array.isArray(req.body.ingredients) || req.body.ingredients.length === 0) {
+      return res.status(400).json({ error: 'At least one recipe ingredient is required' });
+    }
+    const menuItem = await prisma.menuItem.findUniqueOrThrow({
+      where: { id: req.params.menuItemId }, select: { category: { select: { menu: { select: { truckId: true } } } } },
+    });
+    await assertTruckAccess(req.user, menuItem.category.menu.truckId, 'MANAGER');
+    const uniqueIds = new Set(req.body.ingredients.map((ingredient) => ingredient.inventoryItemId));
+    if (uniqueIds.size !== req.body.ingredients.length || req.body.ingredients.some((ingredient) => !Number.isFinite(ingredient.quantityPerItem) || ingredient.quantityPerItem <= 0)) {
+      return res.status(400).json({ error: 'Recipe ingredients must be unique with positive quantities' });
+    }
+    const inventory = await prisma.inventoryItem.findMany({ where: { id: { in: [...uniqueIds] }, truckId: menuItem.category.menu.truckId } });
+    if (inventory.length !== uniqueIds.size) return res.status(409).json({ error: 'Recipe inventory must belong to the same truck' });
+    await prisma.$transaction(async (tx) => {
+      await tx.menuItemIngredient.deleteMany({ where: { menuItemId: req.params.menuItemId } });
+      await tx.menuItemIngredient.createMany({ data: req.body.ingredients.map((ingredient) => ({ menuItemId: req.params.menuItemId, ...ingredient })) });
+    });
+    res.json(await prisma.menuItemIngredient.findMany({ where: { menuItemId: req.params.menuItemId }, include: { inventoryItem: true } }));
+  } catch (error) { next(error); }
+});
 
 // ==================== INVENTORY ITEMS ====================
 
@@ -153,25 +224,38 @@ router.put('/item/:id', authenticate, async (req, res) => {
 router.patch('/item/:id/adjust', authenticate, async (req, res) => {
   try {
     const { adjustment, reason } = req.body;
-
-    const item = await prisma.inventoryItem.findUnique({
-      where: { id: req.params.id }
-    });
-
-    const newQuantity = item.quantity + parseFloat(adjustment);
-
-    const updated = await prisma.inventoryItem.update({
-      where: { id: req.params.id },
-      data: {
-        quantity: Math.max(0, newQuantity),
-        lastRestocked: adjustment > 0 ? new Date() : item.lastRestocked
+    const delta = Number(adjustment);
+    const key = req.get('idempotency-key');
+    if (!Number.isFinite(delta) || delta === 0 || !reason?.trim() || !key) {
+      return res.status(400).json({ error: 'Non-zero adjustment, reason, and Idempotency-Key header are required' });
+    }
+    const updated = await prisma.$transaction(async (tx) => {
+      const duplicate = await tx.inventoryMovement.findUnique({ where: { idempotencyKey: key } });
+      if (duplicate) {
+        if (duplicate.inventoryItemId !== req.params.id || duplicate.quantityDelta !== delta || duplicate.reason !== reason) {
+          throw Object.assign(new Error('Inventory idempotency key conflict'), { status: 409 });
+        }
+        return tx.inventoryItem.findUniqueOrThrow({ where: { id: req.params.id } });
       }
-    });
-
+      await tx.$queryRawUnsafe('SELECT id FROM "InventoryItem" WHERE id = $1 FOR UPDATE', req.params.id);
+      const item = await tx.inventoryItem.findUniqueOrThrow({ where: { id: req.params.id } });
+      if (item.quantity + delta < 0) throw Object.assign(new Error('Inventory adjustment would create negative stock'), { status: 409 });
+      const result = await tx.inventoryItem.update({
+        where: { id: item.id },
+        data: { quantity: { increment: delta }, lastRestocked: delta > 0 ? new Date() : item.lastRestocked }
+      });
+      await tx.inventoryMovement.create({
+        data: {
+          inventoryItemId: item.id, actorId: req.user.id, quantityDelta: delta, balanceAfter: result.quantity,
+          reason, referenceType: 'ManualAdjustment', referenceId: key, idempotencyKey: key
+        }
+      });
+      return result;
+    }, { isolationLevel: 'Serializable' });
     res.json(updated);
   } catch (error) {
     console.error('Adjust inventory error:', error);
-    res.status(500).json({ error: 'Failed to adjust inventory' });
+    res.status(error.status || 500).json({ error: error.message || 'Failed to adjust inventory' });
   }
 });
 

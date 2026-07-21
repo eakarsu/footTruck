@@ -98,10 +98,17 @@ export const menusAPI = {
 export const ordersAPI = {
   getByTruck: (truckId, params) => api.get(`/orders/truck/${truckId}`, { params }),
   getOne: (id) => api.get(`/orders/${id}`),
-  create: (data) => api.post('/orders', data),
-  updateStatus: (id, status) => api.patch(`/orders/${id}/status`, { status }),
-  updatePayment: (id, data) => api.patch(`/orders/${id}/payment`, data),
-  cancel: (id) => api.patch(`/orders/${id}/cancel`),
+  create: (data, key = crypto.randomUUID()) => api.post('/orders', data, { headers: { 'Idempotency-Key': key } }),
+  updateStatus: (id, status, key = crypto.randomUUID()) => {
+    if (status === 'PREPARING') return api.post(`/orders/${id}/start-preparation`, {}, { headers: { 'Idempotency-Key': key } });
+    if (status === 'PICKED_UP') return api.post(`/orders/${id}/pickup`, {}, { headers: { 'Idempotency-Key': key } });
+    return Promise.reject(new Error('Fulfillment quantities are required before an order can become ready'));
+  },
+  updatePayment: (id, data, key = crypto.randomUUID()) => api.post(`/orders/${id}/payment`, data, { headers: { 'Idempotency-Key': key } }),
+  cancel: (id, reason, key = crypto.randomUUID()) => api.post(`/orders/${id}/cancel`, { reason }, { headers: { 'Idempotency-Key': key } }),
+  fulfill: (id, quantities, key = crypto.randomUUID()) => api.post(`/orders/${id}/fulfillment`, { quantities }, { headers: { 'Idempotency-Key': key } }),
+  refund: (id, data, key = crypto.randomUUID()) => api.post(`/orders/${id}/refunds`, data, { headers: { 'Idempotency-Key': key } }),
+  recover: (id, note, key = crypto.randomUUID()) => api.post(`/orders/${id}/recover`, { note }, { headers: { 'Idempotency-Key': key } }),
   getQueue: (truckId) => api.get(`/orders/truck/${truckId}/queue`),
   getStats: (truckId) => api.get(`/orders/truck/${truckId}/stats/today`),
   // Pre-Order
@@ -109,13 +116,9 @@ export const ordersAPI = {
   generateSlots: (truckId, data) => api.post(`/orders/truck/${truckId}/pre-order/generate-slots`, data),
   getPreOrderSettings: (truckId) => api.get(`/orders/truck/${truckId}/pre-order/settings`),
   updatePreOrderSettings: (truckId, data) => api.put(`/orders/truck/${truckId}/pre-order/settings`, data),
-  createPreOrder: (data) => api.post('/orders/public/pre-order', data),
+  createPreOrder: (data, key = crypto.randomUUID()) => api.post('/orders/public/pre-order', data, { headers: { 'Idempotency-Key': key } }),
   getPublicSlots: (truckId, params) => api.get(`/orders/public/truck/${truckId}/available-slots`, { params }),
-  trackOrder: (orderNumber) => api.get(`/orders/public/order/${orderNumber}`),
-  bulkDelete: (ids) => api.delete('/orders/bulk-delete', { data: { ids } }),
-  bulkUpdate: (ids, data) => api.patch('/orders/bulk-update', { ids, data }),
-  exportCSV: (truckId) => api.get(`/orders/truck/${truckId}/export/csv`, { responseType: 'blob' }),
-  exportPDF: (truckId) => api.get(`/orders/truck/${truckId}/export/pdf`, { responseType: 'blob' })
+  trackOrder: (orderNumber, token) => api.get(`/orders/public/order/${orderNumber}`, { headers: { 'X-Order-Access-Token': token } })
 };
 
 // Inventory
@@ -142,43 +145,6 @@ export const inventoryAPI = {
   bulkUpdate: (ids, data) => api.patch('/inventory/bulk-update', { ids, data }),
   exportCSV: (truckId) => api.get(`/inventory/truck/${truckId}/export/csv`, { responseType: 'blob' }),
   exportPDF: (truckId) => api.get(`/inventory/truck/${truckId}/export/pdf`, { responseType: 'blob' })
-};
-
-// Social
-export const socialAPI = {
-  getByTruck: (truckId, params) => api.get(`/social/truck/${truckId}`, { params }),
-  getOne: (id) => api.get(`/social/${id}`),
-  create: (data) => api.post('/social', data),
-  update: (id, data) => api.put(`/social/${id}`, data),
-  publish: (id) => api.patch(`/social/${id}/publish`),
-  delete: (id) => api.delete(`/social/${id}`),
-  getScheduled: (truckId) => api.get(`/social/truck/${truckId}/scheduled`),
-  getAnalytics: (truckId, params) => api.get(`/social/truck/${truckId}/analytics`, { params }),
-  createLocationAnnouncement: (truckId, data) => api.post(`/social/truck/${truckId}/location-announcement`, data),
-  createMenuPost: (truckId, data) => api.post(`/social/truck/${truckId}/menu-post`, data),
-  // Templates
-  getTemplates: (truckId) => api.get(`/social/truck/${truckId}/templates`),
-  getTemplate: (id) => api.get(`/social/templates/${id}`),
-  createTemplate: (truckId, data) => api.post(`/social/truck/${truckId}/templates`, data),
-  updateTemplate: (id, data) => api.put(`/social/templates/${id}`, data),
-  deleteTemplate: (id) => api.delete(`/social/templates/${id}`),
-  // Auto-Post Rules
-  getAutoRules: (truckId) => api.get(`/social/truck/${truckId}/auto-rules`),
-  createAutoRule: (truckId, data) => api.post(`/social/truck/${truckId}/auto-rules`, data),
-  updateAutoRule: (id, data) => api.put(`/social/auto-rules/${id}`, data),
-  deleteAutoRule: (id) => api.delete(`/social/auto-rules/${id}`),
-  toggleAutoRule: (id) => api.patch(`/social/auto-rules/${id}/toggle`),
-  // Social Accounts
-  getAccounts: (truckId) => api.get(`/social/truck/${truckId}/accounts`),
-  connectAccount: (platform, data) => api.post(`/social/accounts/connect/${platform}`, data),
-  disconnectAccount: (id) => api.delete(`/social/accounts/${id}`),
-  refreshAccountToken: (id) => api.post(`/social/accounts/${id}/refresh`),
-  // Trigger
-  triggerArrival: (truckId, data) => api.post(`/social/truck/${truckId}/trigger-arrival`, data),
-  bulkDelete: (ids) => api.delete('/social/bulk-delete', { data: { ids } }),
-  bulkUpdate: (ids, data) => api.patch('/social/bulk-update', { ids, data }),
-  exportCSV: (truckId) => api.get(`/social/truck/${truckId}/export/csv`, { responseType: 'blob' }),
-  exportPDF: (truckId) => api.get(`/social/truck/${truckId}/export/pdf`, { responseType: 'blob' })
 };
 
 // Financial
@@ -266,26 +232,6 @@ export const permitsAPI = {
   bulkUpdate: (ids, data) => api.patch('/permits/bulk-update', { ids, data }),
   exportCSV: (truckId) => api.get(`/permits/truck/${truckId}/export/csv`, { responseType: 'blob' }),
   exportPDF: (truckId) => api.get(`/permits/truck/${truckId}/export/pdf`, { responseType: 'blob' })
-};
-
-// AI
-export const aiAPI = {
-  getRecommendations: (truckId) => api.get(`/ai/truck/${truckId}/recommendations`),
-  generateRecommendations: (truckId) => api.post(`/ai/truck/${truckId}/generate`),
-  actionRecommendation: (id) => api.patch(`/ai/${id}/action`),
-  getLocationSuggestions: (truckId, params) => api.get(`/ai/truck/${truckId}/location-suggest`, { params }),
-  generatePost: (truckId, data) => api.post(`/ai/truck/${truckId}/generate-post`, data),
-  getDemandForecast: (truckId, params) => api.get(`/ai/truck/${truckId}/demand-forecast`, { params }),
-  getMenuInsights: (truckId) => api.get(`/ai/truck/${truckId}/menu-insights`),
-  // Enhanced Demand Prediction
-  getEnhancedForecast: (truckId, params) => api.get(`/ai/truck/${truckId}/demand-forecast/enhanced`, { params }),
-  getDemandPatterns: (truckId, params) => api.get(`/ai/truck/${truckId}/demand-patterns`, { params }),
-  generatePredictions: (truckId, data) => api.post(`/ai/truck/${truckId}/predictions/generate`, data),
-  generateResponse: (truckId, data) => api.post(`/ai/truck/${truckId}/generate-response`, data),
-  // Mechanical AI ops added in apply pass
-  dynamicPricing: (truckId, data) => api.post(`/ai/truck/${truckId}/dynamic-pricing`, data || {}),
-  predictMaintenance: (truckId, data) => api.post(`/ai/truck/${truckId}/predict-maintenance`, data),
-  crewSchedule: (truckId, data) => api.post(`/ai/truck/${truckId}/crew-schedule`, data)
 };
 
 // Dashboard

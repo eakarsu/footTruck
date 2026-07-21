@@ -15,22 +15,14 @@ import Locations from './pages/Locations';
 import Menu from './pages/Menu';
 import Orders from './pages/Orders';
 import Inventory from './pages/Inventory';
-import Social from './pages/Social';
 import Financial from './pages/Financial';
 import Events from './pages/Events';
 import Permits from './pages/Permits';
-import AI from './pages/AI';
-import AIAdvanced from './pages/AIAdvanced';
 import Settings from './pages/Settings';
 import CustomerMap from './pages/CustomerMap';
 import Analytics from './pages/Analytics';
 import PreOrder from './pages/PreOrder';
-import CustomViewsPage from './pages/CustomViewsPage';
-import EventPrepForecast from './pages/EventPrepForecast';
 import Layout from './components/Layout';
-
-import CodexCustomVizFeature from './pages/CodexCustomVizFeature';
-import CodexOperationsFeature from './pages/CodexOperationsFeature';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -53,9 +45,6 @@ function ProtectedRoute({ children }) {
 function AppRoutes() {
   return (
     <Routes>
-        <Route path="/codex/custom-viz" element={<ProtectedRoute><CodexCustomVizFeature /></ProtectedRoute>} />
-        <Route path="/codex/operations" element={<ProtectedRoute><CodexOperationsFeature /></ProtectedRoute>} />
-
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -76,15 +65,10 @@ function AppRoutes() {
                     <Route path="/menu" element={<Menu />} />
                     <Route path="/orders" element={<Orders />} />
                     <Route path="/inventory" element={<Inventory />} />
-                    <Route path="/social" element={<Social />} />
                     <Route path="/financial" element={<Financial />} />
                     <Route path="/events" element={<Events />} />
                     <Route path="/permits" element={<Permits />} />
-                    <Route path="/ai" element={<AI />} />
-                    <Route path="/ai-advanced" element={<AIAdvanced />} />
                     <Route path="/analytics" element={<Analytics />} />
-                    <Route path="/custom-views" element={<CustomViewsPage />} />
-                    <Route path="/event-prep-forecast" element={<EventPrepForecast />} />
                     <Route path="/settings" element={<Settings />} />
                   </Routes>
                 </ErrorBoundary>

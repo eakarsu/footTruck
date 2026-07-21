@@ -1,15 +1,54 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { assertTruckAccess, requireTruckAccess } = require('../middleware/truckAccess');
 const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
 const { sendCSV, sendPDF } = require('../utils/exportHelpers');
 const { exportLimiter } = require('../middleware/rateLimiter');
+const prisma = require('../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
+function requireRelatedTruckAccess(required, resolveTruckIds) {
+  return async (req, _res, next) => {
+    try {
+      const truckIds = [...new Set((await resolveTruckIds(req)).filter(Boolean))];
+      if (!truckIds.length) {
+        const error = new Error('Menu resource not found');
+        error.status = 404;
+        throw error;
+      }
+      await Promise.all(truckIds.map((truckId) => assertTruckAccess(req.user, truckId, required)));
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+const menuTruckIds = async (req) => {
+  const menu = await prisma.menu.findUnique({ where: { id: req.params.id || req.params.menuId }, select: { truckId: true } });
+  return menu ? [menu.truckId] : [];
+};
+
+const categoryTruckIds = async (req) => {
+  const category = await prisma.menuCategory.findUnique({
+    where: { id: req.params.id || req.params.categoryId },
+    select: { menu: { select: { truckId: true } } },
+  });
+  return category ? [category.menu.truckId] : [];
+};
+
+const itemTruckIds = async (req) => {
+  const ids = req.body.ids || [req.params.id];
+  const items = await prisma.menuItem.findMany({
+    where: { id: { in: ids } },
+    select: { category: { select: { menu: { select: { truckId: true } } } } },
+  });
+  if (items.length !== ids.length) return [];
+  return items.map((item) => item.category.menu.truckId);
+};
 
 // Get all menus for a truck (with search)
-router.get('/truck/:truckId', authenticate, async (req, res) => {
+router.get('/truck/:truckId', authenticate, requireTruckAccess('VIEWER'), async (req, res) => {
   try {
     const { search } = req.query;
 
@@ -38,7 +77,7 @@ router.get('/truck/:truckId', authenticate, async (req, res) => {
 });
 
 // Get single menu
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requireRelatedTruckAccess('VIEWER', menuTruckIds), async (req, res) => {
   try {
     const menu = await prisma.menu.findUnique({
       where: { id: req.params.id },
@@ -62,7 +101,7 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // Create menu
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, requireTruckAccess('MANAGER'), async (req, res) => {
   try {
     const { truckId, name, description, isActive, isDefault } = req.body;
 
@@ -92,7 +131,7 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 // Update menu
-router.put('/:id', authenticate, async (req, res) => {
+router.put('/:id', authenticate, requireRelatedTruckAccess('MANAGER', menuTruckIds), async (req, res) => {
   try {
     const { name, description, isActive, isDefault } = req.body;
 
@@ -120,7 +159,7 @@ router.put('/:id', authenticate, async (req, res) => {
 });
 
 // Delete menu
-router.delete('/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, requireRelatedTruckAccess('MANAGER', menuTruckIds), async (req, res) => {
   try {
     await prisma.menu.delete({
       where: { id: req.params.id }
@@ -136,7 +175,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 // ==================== CATEGORIES ====================
 
 // Create category
-router.post('/:menuId/categories', authenticate, async (req, res) => {
+router.post('/:menuId/categories', authenticate, requireRelatedTruckAccess('MANAGER', menuTruckIds), async (req, res) => {
   try {
     const { name, description, sortOrder } = req.body;
 
@@ -157,7 +196,7 @@ router.post('/:menuId/categories', authenticate, async (req, res) => {
 });
 
 // Update category
-router.put('/categories/:id', authenticate, async (req, res) => {
+router.put('/categories/:id', authenticate, requireRelatedTruckAccess('MANAGER', categoryTruckIds), async (req, res) => {
   try {
     const { name, description, sortOrder } = req.body;
 
@@ -174,7 +213,7 @@ router.put('/categories/:id', authenticate, async (req, res) => {
 });
 
 // Delete category
-router.delete('/categories/:id', authenticate, async (req, res) => {
+router.delete('/categories/:id', authenticate, requireRelatedTruckAccess('MANAGER', categoryTruckIds), async (req, res) => {
   try {
     await prisma.menuCategory.delete({
       where: { id: req.params.id }
@@ -190,7 +229,7 @@ router.delete('/categories/:id', authenticate, async (req, res) => {
 // ==================== MENU ITEMS ====================
 
 // Get all items for a truck (across all menus)
-router.get('/truck/:truckId/items', authenticate, async (req, res) => {
+router.get('/truck/:truckId/items', authenticate, requireTruckAccess('VIEWER'), async (req, res) => {
   try {
     const menus = await prisma.menu.findMany({
       where: { truckId: req.params.truckId },
@@ -215,7 +254,7 @@ router.get('/truck/:truckId/items', authenticate, async (req, res) => {
 });
 
 // Create menu item
-router.post('/categories/:categoryId/items', authenticate, async (req, res) => {
+router.post('/categories/:categoryId/items', authenticate, requireRelatedTruckAccess('MANAGER', categoryTruckIds), async (req, res) => {
   try {
     const {
       name, description, price, image, isAvailable, isSoldOut,
@@ -249,7 +288,7 @@ router.post('/categories/:categoryId/items', authenticate, async (req, res) => {
 });
 
 // Update menu item
-router.put('/items/:id', authenticate, async (req, res) => {
+router.put('/items/:id', authenticate, requireRelatedTruckAccess('MANAGER', itemTruckIds), async (req, res) => {
   try {
     const {
       name, description, price, image, isAvailable, isSoldOut,
@@ -283,7 +322,7 @@ router.put('/items/:id', authenticate, async (req, res) => {
 });
 
 // Toggle item sold out status
-router.patch('/items/:id/soldout', authenticate, async (req, res) => {
+router.patch('/items/:id/soldout', authenticate, requireRelatedTruckAccess('OPERATOR', itemTruckIds), async (req, res) => {
   try {
     const item = await prisma.menuItem.findUnique({
       where: { id: req.params.id }
@@ -302,7 +341,7 @@ router.patch('/items/:id/soldout', authenticate, async (req, res) => {
 });
 
 // Delete menu item
-router.delete('/items/:id', authenticate, async (req, res) => {
+router.delete('/items/:id', authenticate, requireRelatedTruckAccess('MANAGER', itemTruckIds), async (req, res) => {
   try {
     await prisma.menuItem.delete({
       where: { id: req.params.id }
@@ -316,7 +355,7 @@ router.delete('/items/:id', authenticate, async (req, res) => {
 });
 
 // Get daily specials
-router.get('/truck/:truckId/specials', authenticate, async (req, res) => {
+router.get('/truck/:truckId/specials', authenticate, requireTruckAccess('VIEWER'), async (req, res) => {
   try {
     const menus = await prisma.menu.findMany({
       where: { truckId: req.params.truckId, isActive: true },
@@ -384,7 +423,7 @@ router.get('/public/truck/:truckId/items', async (req, res) => {
 // ==================== BULK OPERATIONS & EXPORTS ====================
 
 // Bulk delete menu items
-router.delete('/items/bulk-delete', authenticate, async (req, res) => {
+router.delete('/items/bulk-delete', authenticate, requireRelatedTruckAccess('MANAGER', itemTruckIds), async (req, res) => {
   try {
     const { ids } = req.body;
     if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
@@ -396,7 +435,7 @@ router.delete('/items/bulk-delete', authenticate, async (req, res) => {
 });
 
 // Bulk update menu items
-router.patch('/items/bulk-update', authenticate, async (req, res) => {
+router.patch('/items/bulk-update', authenticate, requireRelatedTruckAccess('MANAGER', itemTruckIds), async (req, res) => {
   try {
     const { ids, data } = req.body;
     if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
@@ -408,7 +447,7 @@ router.patch('/items/bulk-update', authenticate, async (req, res) => {
 });
 
 // Export menu as CSV
-router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
+router.get('/truck/:truckId/export/csv', authenticate, requireTruckAccess('VIEWER'), exportLimiter, async (req, res) => {
   try {
     const menus = await prisma.menu.findMany({
       where: { truckId: req.params.truckId },
@@ -433,7 +472,7 @@ router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req
 });
 
 // Export menu as PDF
-router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
+router.get('/truck/:truckId/export/pdf', authenticate, requireTruckAccess('VIEWER'), exportLimiter, async (req, res) => {
   try {
     const menus = await prisma.menu.findMany({
       where: { truckId: req.params.truckId },

@@ -1,13 +1,12 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const analyticsService = require('../services/analyticsService');
 const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
 const { sendCSV, sendPDF } = require('../utils/exportHelpers');
 const { exportLimiter } = require('../middleware/rateLimiter');
+const prisma = require('../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // ==================== SALES ====================
 

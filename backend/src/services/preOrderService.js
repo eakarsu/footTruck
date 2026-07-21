@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 
 // Generate time slots for a truck location
 async function generateTimeSlots(truckLocationId, settings = {}) {

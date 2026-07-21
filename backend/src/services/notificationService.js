@@ -1,9 +1,6 @@
-// Notification Service
-// This service handles SMS and email notifications for pre-orders
-// In production, integrate with Twilio (SMS) and SendGrid (email)
-
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
+const { requireConfig } = require('../lib/secrets');
+const { sendTransactionalEmail } = require('./emailProvider');
 
 // Notification types
 const NOTIFICATION_TYPES = {
@@ -37,49 +34,22 @@ function formatTime(date) {
   });
 }
 
-// Send SMS notification (mock implementation)
 async function sendSMS(phoneNumber, message) {
-  // In production, use Twilio:
-  // const twilio = require('twilio')(process.env.TWILIO_SID, process.env.TWILIO_TOKEN);
-  // await twilio.messages.create({
-  //   body: message,
-  //   from: process.env.TWILIO_PHONE,
-  //   to: phoneNumber
-  // });
-
-  console.log(`[SMS] To: ${phoneNumber}`);
-  console.log(`[SMS] Message: ${message}`);
-
-  // Return mock success
-  return {
-    success: true,
-    sid: `mock_${Date.now()}`,
-    to: phoneNumber
-  };
+  const response = await fetch(requireConfig('SMS_PROVIDER_URL'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${requireConfig('SMS_PROVIDER_TOKEN')}` },
+    body: JSON.stringify({ to: phoneNumber, message }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`SMS provider returned HTTP ${response.status}`);
+  const result = await response.json();
+  if (!result.messageId) throw new Error('SMS provider result is missing messageId');
+  return { success: true, messageId: result.messageId, to: phoneNumber };
 }
 
-// Send email notification (mock implementation)
 async function sendEmail(email, subject, message) {
-  // In production, use SendGrid:
-  // const sgMail = require('@sendgrid/mail');
-  // sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-  // await sgMail.send({
-  //   to: email,
-  //   from: 'noreply@foodtruck.app',
-  //   subject: subject,
-  //   text: message
-  // });
-
-  console.log(`[EMAIL] To: ${email}`);
-  console.log(`[EMAIL] Subject: ${subject}`);
-  console.log(`[EMAIL] Message: ${message}`);
-
-  // Return mock success
-  return {
-    success: true,
-    messageId: `mock_${Date.now()}`,
-    to: email
-  };
+  const result = await sendTransactionalEmail({ to: email, subject, text: message });
+  return { success: true, messageId: result.messageId, to: email };
 }
 
 // Send notification for an order
@@ -131,7 +101,10 @@ async function sendOrderNotification(orderId, type) {
     }
   }
 
-  // Create notification record
+  if (results.length === 0 || results.every((result) => !result.success)) {
+    throw new Error('No configured notification channel accepted the message');
+  }
+
   await prisma.orderNotification.create({
     data: {
       orderId,

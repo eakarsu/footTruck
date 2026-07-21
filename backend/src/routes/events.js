@@ -1,12 +1,11 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
 const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
 const { sendCSV, sendPDF } = require('../utils/exportHelpers');
 const { exportLimiter } = require('../middleware/rateLimiter');
+const prisma = require('../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 // Get all events (with pagination and search)
 router.get('/', authenticate, async (req, res) => {

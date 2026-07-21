@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
+const { sha256 } = require('../lib/canonical');
+const { requireConfig } = require('../lib/secrets');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -15,14 +15,14 @@ const authenticate = async (req, res, next) => {
 
     // Check if token is blacklisted (logged out)
     const blacklisted = await prisma.tokenBlacklist.findUnique({
-      where: { token }
+      where: { token: sha256(token) }
     });
 
     if (blacklisted) {
       return res.status(401).json({ error: 'Token has been revoked' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, requireConfig('JWT_SECRET', { minimumLength: 32 }));
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId }

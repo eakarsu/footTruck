@@ -1,735 +1,311 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const { randomUUID } = require('crypto');
 const { authenticate } = require('../middleware/auth');
-const { v4: uuidv4 } = require('uuid');
+const prisma = require('../lib/prisma');
+const { verifyOrderAuditChain } = require('../services/orderAudit');
+const {
+  AccessError,
+  assertCustomerOrderAccess,
+  assertOrderAccess,
+  assertTruckAccess,
+} = require('../middleware/truckAccess');
+const {
+  CommerceProviderError,
+  callCommerceProvider,
+} = require('../providers/commerceProvider');
+const {
+  OrderWorkflowError,
+  applyDeliveryEvidence,
+  applyPaymentEvidence,
+  cancelOrder,
+  createReservedOrder,
+  fulfillOrder,
+  getOrder,
+  markOrderException,
+  reconcilePayment,
+  recoverOrder,
+  refundOrder,
+  transitionOrder,
+} = require('../services/orderService');
 const preOrderService = require('../services/preOrderService');
-const notificationService = require('../services/notificationService');
 const { getPaginationParams, paginatedResponse } = require('../utils/pagination');
-const { sendCSV, sendPDF } = require('../utils/exportHelpers');
-const { exportLimiter } = require('../middleware/rateLimiter');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
-// Generate order number
-const generateOrderNumber = () => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.random().toString(36).substring(2, 5).toUpperCase();
-  return `FT-${timestamp}-${random}`;
-};
+function requestContext(req, source = 'API') {
+  return { requestId: req.get('x-request-id') || randomUUID(), source };
+}
 
-// Get all orders for a truck (with pagination and search)
-router.get('/truck/:truckId', authenticate, async (req, res) => {
+function jsonSafe(value) {
+  return JSON.parse(JSON.stringify(value, (_, item) => typeof item === 'bigint' ? item.toString() : item));
+}
+
+function idempotencyKey(req) {
+  const value = req.get('idempotency-key');
+  if (!value || value.length > 200) throw new OrderWorkflowError('A valid Idempotency-Key header is required', 400, 'IDEMPOTENCY_KEY_REQUIRED');
+  return value;
+}
+
+async function taxEvidenceFor(input, key) {
+  const menuItems = await prisma.menuItem.findMany({
+    where: { id: { in: input.items.map((item) => item.menuItemId) } },
+    select: { id: true, name: true, price: true, specialPrice: true, isSpecial: true },
+  });
+  const byId = new Map(menuItems.map((item) => [item.id, item]));
+  const lineItems = input.items.map((requested) => {
+    const menuItem = byId.get(requested.menuItemId);
+    if (!menuItem) throw new OrderWorkflowError('Menu item not found', 400, 'MENU_ITEM_NOT_FOUND');
+    const unitPriceCents = Math.round((menuItem.isSpecial && menuItem.specialPrice != null ? menuItem.specialPrice : menuItem.price) * 100);
+    return { reference: menuItem.id, description: menuItem.name, quantity: requested.quantity, unitPriceCents };
+  });
+  return callCommerceProvider('TAX_QUOTE', {
+    sourceOrderRef: key,
+    idempotencyKey: `tax:${key}`,
+    currency: 'USD',
+    amountCents: lineItems.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0),
+    lineItems,
+    destination: input.deliveryDestination || null,
+    metadata: { truckId: input.truckId, orderType: input.type || 'WALK_IN' },
+  });
+}
+
+async function handle(handler, req, res) {
   try {
-    const { status, date, type } = req.query;
-    const { page, limit, skip, search } = getPaginationParams(req.query);
-
-    const whereClause = { truckId: req.params.truckId };
-
-    if (status) whereClause.status = status;
-    if (type) whereClause.type = type;
-
-    if (date) {
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
-      whereClause.createdAt = { gte: startOfDay, lte: endOfDay };
+    await handler();
+  } catch (error) {
+    if (error instanceof AccessError || error instanceof OrderWorkflowError || error instanceof CommerceProviderError) {
+      return res.status(error.status || 500).json({ error: error.message, code: error.code });
     }
-
-    if (search) {
-      whereClause.OR = [
-        { orderNumber: { contains: search, mode: 'insensitive' } },
-        { customerName: { contains: search, mode: 'insensitive' } },
-        { customerPhone: { contains: search, mode: 'insensitive' } },
-        { customerEmail: { contains: search, mode: 'insensitive' } }
-      ];
-    }
-
-    const [orders, total] = await Promise.all([
-      prisma.order.findMany({
-        where: whereClause,
-        include: { items: { include: { menuItem: true } } },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit
-      }),
-      prisma.order.count({ where: whereClause })
-    ]);
-
-    res.json(paginatedResponse(orders, total, page, limit));
-  } catch (error) {
-    console.error('Get orders error:', error);
-    res.status(500).json({ error: 'Failed to get orders' });
+    console.error('Order route error:', error);
+    return res.status(500).json({ error: 'Order workflow failed' });
   }
-});
+}
 
-// Get single order
-router.get('/:id', authenticate, async (req, res) => {
-  try {
-    const order = await prisma.order.findUnique({
-      where: { id: req.params.id },
-      include: {
-        items: {
-          include: { menuItem: true }
-        },
-        notifications: true
-      }
-    });
+// Customer workflow: access requires both the unguessable order number and the
+// deterministic secret token returned only when the idempotent order is created.
+router.get('/public/order/:orderNumber', (req, res) => handle(async () => {
+  const order = await prisma.order.findUnique({
+    where: { orderNumber: req.params.orderNumber },
+    include: {
+      truck: { select: { name: true, phone: true } },
+      items: { select: { quantity: true, fulfilledQuantity: true, menuItem: { select: { name: true } } } },
+    },
+  });
+  if (!order) throw new AccessError('Order not found', 404);
+  assertCustomerOrderAccess(order, req.get('x-order-access-token') || req.query.token);
+  res.json({
+    orderNumber: order.orderNumber,
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    fulfillmentStatus: order.fulfillmentStatus,
+    scheduledPickup: order.scheduledPickup,
+    estimatedReadyTime: order.estimatedReadyTime,
+    actualReadyTime: order.actualReadyTime,
+    totalCents: order.totalCents,
+    currency: order.currency,
+    truck: order.truck,
+    items: order.items,
+    createdAt: order.createdAt,
+  });
+}, req, res));
 
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    res.json(order);
-  } catch (error) {
-    console.error('Get order error:', error);
-    res.status(500).json({ error: 'Failed to get order' });
+router.post('/public/pre-order', (req, res) => handle(async () => {
+  const key = idempotencyKey(req);
+  const input = { ...req.body, idempotencyKey: key, type: 'PRE_ORDER', pickupWindowId: req.body.slotId };
+  if (!input.customerName || (!input.customerPhone && !input.customerEmail)) {
+    throw new OrderWorkflowError('Customer name and contact information are required', 400);
   }
-});
-
-// Create order
-router.post('/', authenticate, async (req, res) => {
-  try {
-    const {
-      truckId, type, customerName, customerPhone, customerEmail,
-      items, notes, paymentMethod
-    } = req.body;
-
-    // Calculate totals
-    let subtotal = 0;
-    const orderItems = [];
-
-    for (const item of items) {
-      const menuItem = await prisma.menuItem.findUnique({
-        where: { id: item.menuItemId }
-      });
-
-      if (!menuItem) {
-        return res.status(400).json({ error: `Menu item not found: ${item.menuItemId}` });
-      }
-
-      const unitPrice = menuItem.isSpecial && menuItem.specialPrice
-        ? menuItem.specialPrice
-        : menuItem.price;
-      const totalPrice = unitPrice * item.quantity;
-      subtotal += totalPrice;
-
-      orderItems.push({
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        unitPrice,
-        totalPrice,
-        specialInstructions: item.specialInstructions
-      });
-    }
-
-    const tax = subtotal * 0.08; // 8% tax
-    const total = subtotal + tax;
-
-    const order = await prisma.order.create({
-      data: {
-        orderNumber: generateOrderNumber(),
-        truckId,
-        type: type || 'WALK_IN',
-        customerName,
-        customerPhone,
-        customerEmail,
-        subtotal,
-        tax,
-        total,
-        notes,
-        paymentMethod,
-        status: 'PENDING',
-        paymentStatus: 'PENDING',
-        items: {
-          create: orderItems
-        }
-      },
-      include: {
-        items: {
-          include: { menuItem: true }
-        }
-      }
-    });
-
-    res.status(201).json(order);
-  } catch (error) {
-    console.error('Create order error:', error);
-    res.status(500).json({ error: 'Failed to create order' });
-  }
-});
-
-// Update order status
-router.patch('/:id/status', authenticate, async (req, res) => {
-  try {
-    const { status } = req.body;
-
-    const updateData = { status };
-
-    if (status === 'READY') {
-      updateData.actualReadyTime = new Date();
-    }
-
-    const order = await prisma.order.update({
-      where: { id: req.params.id },
-      data: updateData,
-      include: {
-        items: {
-          include: { menuItem: true }
-        }
-      }
-    });
-
-    // Create notification
-    const notificationTypes = {
-      CONFIRMED: 'ORDER_CONFIRMED',
-      PREPARING: 'ORDER_PREPARING',
-      READY: 'ORDER_READY',
-      PICKED_UP: 'ORDER_PICKED_UP'
-    };
-
-    if (notificationTypes[status]) {
-      await prisma.orderNotification.create({
-        data: {
-          orderId: order.id,
-          type: notificationTypes[status],
-          message: `Order ${order.orderNumber} is now ${status.toLowerCase().replace('_', ' ')}`
-        }
-      });
-    }
-
-    res.json(order);
-  } catch (error) {
-    console.error('Update order status error:', error);
-    res.status(500).json({ error: 'Failed to update order status' });
-  }
-});
-
-// Update payment status
-router.patch('/:id/payment', authenticate, async (req, res) => {
-  try {
-    const { paymentStatus, paymentMethod, tip } = req.body;
-
-    const order = await prisma.order.findUnique({
-      where: { id: req.params.id }
-    });
-
-    const updateData = {
-      paymentStatus,
-      paymentMethod
-    };
-
-    if (tip !== undefined) {
-      updateData.tip = parseFloat(tip);
-      updateData.total = order.subtotal + order.tax + parseFloat(tip);
-    }
-
-    const updated = await prisma.order.update({
-      where: { id: req.params.id },
-      data: updateData,
-      include: {
-        items: {
-          include: { menuItem: true }
-        }
-      }
-    });
-
-    res.json(updated);
-  } catch (error) {
-    console.error('Update payment error:', error);
-    res.status(500).json({ error: 'Failed to update payment' });
-  }
-});
-
-// Cancel order
-router.patch('/:id/cancel', authenticate, async (req, res) => {
-  try {
-    const order = await prisma.order.update({
-      where: { id: req.params.id },
-      data: {
-        status: 'CANCELLED',
-        paymentStatus: 'REFUNDED'
-      }
-    });
-
-    res.json(order);
-  } catch (error) {
-    console.error('Cancel order error:', error);
-    res.status(500).json({ error: 'Failed to cancel order' });
-  }
-});
-
-// Get queue (active orders)
-router.get('/truck/:truckId/queue', authenticate, async (req, res) => {
-  try {
-    const orders = await prisma.order.findMany({
-      where: {
-        truckId: req.params.truckId,
-        status: {
-          in: ['PENDING', 'CONFIRMED', 'PREPARING', 'READY']
-        }
-      },
-      include: {
-        items: {
-          include: { menuItem: true }
-        }
-      },
-      orderBy: { createdAt: 'asc' }
-    });
-
-    const queue = {
-      pending: orders.filter(o => o.status === 'PENDING'),
-      confirmed: orders.filter(o => o.status === 'CONFIRMED'),
-      preparing: orders.filter(o => o.status === 'PREPARING'),
-      ready: orders.filter(o => o.status === 'READY')
-    };
-
-    res.json(queue);
-  } catch (error) {
-    console.error('Get queue error:', error);
-    res.status(500).json({ error: 'Failed to get queue' });
-  }
-});
-
-// Get order stats for today
-router.get('/truck/:truckId/stats/today', authenticate, async (req, res) => {
-  try {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const orders = await prisma.order.findMany({
-      where: {
-        truckId: req.params.truckId,
-        createdAt: {
-          gte: startOfDay,
-          lte: endOfDay
-        },
-        status: { not: 'CANCELLED' }
-      }
-    });
-
-    const stats = {
-      totalOrders: orders.length,
-      totalRevenue: orders.reduce((sum, o) => sum + o.total, 0),
-      averageOrderValue: orders.length > 0
-        ? orders.reduce((sum, o) => sum + o.total, 0) / orders.length
-        : 0,
-      completedOrders: orders.filter(o => o.status === 'PICKED_UP').length,
-      pendingOrders: orders.filter(o =>
-        ['PENDING', 'CONFIRMED', 'PREPARING', 'READY'].includes(o.status)
-      ).length
-    };
-
-    res.json(stats);
-  } catch (error) {
-    console.error('Get stats error:', error);
-    res.status(500).json({ error: 'Failed to get stats' });
-  }
-});
-
-// ==================== PRE-ORDER SYSTEM ====================
-
-// Get pre-order slots for a truck
-router.get('/truck/:truckId/pre-order/slots', authenticate, async (req, res) => {
-  try {
-    const { startDate, endDate, truckLocationId } = req.query;
-    const slots = await preOrderService.getSlotsByTruck(req.params.truckId, {
-      startDate,
-      endDate,
-      truckLocationId
-    });
-    res.json(slots);
-  } catch (error) {
-    console.error('Get pre-order slots error:', error);
-    res.status(500).json({ error: 'Failed to get pre-order slots' });
-  }
-});
-
-// Generate time slots for a truck location
-router.post('/truck/:truckId/pre-order/generate-slots', authenticate, async (req, res) => {
-  try {
-    const { truckLocationId } = req.body;
-    if (!truckLocationId) {
-      return res.status(400).json({ error: 'truckLocationId is required' });
-    }
-    const slots = await preOrderService.generateTimeSlots(truckLocationId);
-    res.status(201).json(slots);
-  } catch (error) {
-    console.error('Generate slots error:', error);
-    res.status(500).json({ error: 'Failed to generate time slots' });
-  }
-});
-
-// Get pre-order settings
-router.get('/truck/:truckId/pre-order/settings', authenticate, async (req, res) => {
-  try {
-    const settings = await preOrderService.getSettings(req.params.truckId);
-    res.json(settings);
-  } catch (error) {
-    console.error('Get settings error:', error);
-    res.status(500).json({ error: 'Failed to get pre-order settings' });
-  }
-});
-
-// Update pre-order settings
-router.put('/truck/:truckId/pre-order/settings', authenticate, async (req, res) => {
-  try {
-    const settings = await preOrderService.updateSettings(req.params.truckId, req.body);
-    res.json(settings);
-  } catch (error) {
-    console.error('Update settings error:', error);
-    res.status(500).json({ error: 'Failed to update pre-order settings' });
-  }
-});
-
-// Create a pre-order (authenticated)
-router.post('/pre-order', authenticate, async (req, res) => {
-  try {
-    const {
-      truckId, slotId, customerName, customerPhone, customerEmail,
-      items, notes, paymentMethod
-    } = req.body;
-
-    // Verify slot availability
-    const canOrder = await preOrderService.canPlacePreOrder(truckId, slotId);
-    if (!canOrder.allowed) {
-      return res.status(400).json({ error: canOrder.reason });
-    }
-
-    // Get slot info for pickup time
-    const slot = await prisma.preOrderWindow.findUnique({
-      where: { id: slotId }
-    });
-
-    // Calculate totals
-    let subtotal = 0;
-    const orderItems = [];
-
-    for (const item of items) {
-      const menuItem = await prisma.menuItem.findUnique({
-        where: { id: item.menuItemId }
-      });
-
-      if (!menuItem) {
-        return res.status(400).json({ error: `Menu item not found: ${item.menuItemId}` });
-      }
-
-      const unitPrice = menuItem.isSpecial && menuItem.specialPrice
-        ? menuItem.specialPrice
-        : menuItem.price;
-      const totalPrice = unitPrice * item.quantity;
-      subtotal += totalPrice;
-
-      orderItems.push({
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        unitPrice,
-        totalPrice,
-        specialInstructions: item.specialInstructions
-      });
-    }
-
-    const tax = subtotal * 0.08;
-    const total = subtotal + tax;
-
-    // Create scheduled pickup time
-    const scheduledPickup = new Date(slot.date);
-    const [hours, minutes] = slot.slotStart.split(':').map(Number);
-    scheduledPickup.setHours(hours, minutes, 0, 0);
-
-    // Create order
-    const order = await prisma.order.create({
-      data: {
-        orderNumber: generateOrderNumber(),
-        truckId,
-        type: 'PRE_ORDER',
-        customerName,
-        customerPhone,
-        customerEmail,
-        subtotal,
-        tax,
-        total,
-        notes,
-        paymentMethod,
-        status: 'CONFIRMED',
-        paymentStatus: paymentMethod ? 'COMPLETED' : 'PENDING',
-        pickupWindowId: slotId,
-        scheduledPickup,
-        items: {
-          create: orderItems
-        }
-      },
-      include: {
-        items: { include: { menuItem: true } },
-        pickupWindow: {
-          include: { truckLocation: { include: { location: true } } }
-        }
-      }
-    });
-
-    // Reserve the slot
-    await preOrderService.reserveSlot(slotId);
-
-    // Send confirmation notification
-    await notificationService.sendOrderNotification(order.id, 'ORDER_CONFIRMED');
-
-    res.status(201).json(order);
-  } catch (error) {
-    console.error('Create pre-order error:', error);
-    res.status(500).json({ error: 'Failed to create pre-order' });
-  }
-});
-
-// ==================== BULK OPERATIONS ====================
-
-// Bulk delete orders
-router.delete('/bulk-delete', authenticate, async (req, res) => {
-  try {
-    const { ids } = req.body;
-    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
-
-    await prisma.order.deleteMany({ where: { id: { in: ids } } });
-    res.json({ message: `${ids.length} orders deleted successfully` });
-  } catch (error) {
-    console.error('Bulk delete orders error:', error);
-    res.status(500).json({ error: 'Failed to bulk delete orders' });
-  }
-});
-
-// Bulk update order status
-router.patch('/bulk-update', authenticate, async (req, res) => {
-  try {
-    const { ids, data } = req.body;
-    if (!ids || !ids.length) return res.status(400).json({ error: 'No IDs provided' });
-
-    await prisma.order.updateMany({ where: { id: { in: ids } }, data });
-    res.json({ message: `${ids.length} orders updated successfully` });
-  } catch (error) {
-    console.error('Bulk update orders error:', error);
-    res.status(500).json({ error: 'Failed to bulk update orders' });
-  }
-});
-
-// Export orders as CSV
-router.get('/truck/:truckId/export/csv', authenticate, exportLimiter, async (req, res) => {
-  try {
-    const orders = await prisma.order.findMany({
-      where: { truckId: req.params.truckId },
-      include: { items: { include: { menuItem: true } } },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    const data = orders.map(o => ({
-      orderNumber: o.orderNumber,
-      status: o.status,
-      type: o.type,
-      customerName: o.customerName || '',
-      subtotal: o.subtotal,
-      tax: o.tax,
-      total: o.total,
-      paymentMethod: o.paymentMethod || '',
-      paymentStatus: o.paymentStatus,
-      items: o.items.map(i => `${i.menuItem.name} x${i.quantity}`).join('; '),
-      createdAt: o.createdAt.toISOString()
-    }));
-
-    const fields = ['orderNumber', 'status', 'type', 'customerName', 'subtotal', 'tax', 'total', 'paymentMethod', 'paymentStatus', 'items', 'createdAt'];
-    sendCSV(res, data, fields, 'orders-export');
-  } catch (error) {
-    console.error('Export orders CSV error:', error);
-    res.status(500).json({ error: 'Failed to export orders' });
-  }
-});
-
-// Export orders as PDF
-router.get('/truck/:truckId/export/pdf', authenticate, exportLimiter, async (req, res) => {
-  try {
-    const orders = await prisma.order.findMany({
-      where: { truckId: req.params.truckId },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    const columns = ['Order #', 'Status', 'Type', 'Customer', 'Total', 'Payment', 'Date'];
-    const rows = orders.map(o => [
-      o.orderNumber, o.status, o.type, o.customerName || '-',
-      `$${o.total.toFixed(2)}`, o.paymentStatus,
-      o.createdAt.toLocaleDateString()
-    ]);
-
-    sendPDF(res, 'Orders Report', columns, rows, 'orders-export');
-  } catch (error) {
-    console.error('Export orders PDF error:', error);
-    res.status(500).json({ error: 'Failed to export orders' });
-  }
-});
-
-// ==================== PUBLIC ENDPOINTS ====================
-
-// Get available slots for public ordering (no auth required)
-router.get('/public/truck/:truckId/available-slots', async (req, res) => {
-  try {
-    const { date, locationId } = req.query;
-    const slots = await preOrderService.getPublicSlots(req.params.truckId, {
-      date,
-      locationId
-    });
-    res.json(slots);
-  } catch (error) {
-    console.error('Get public slots error:', error);
-    res.status(500).json({ error: 'Failed to get available slots' });
-  }
-});
-
-// Track order by order number (no auth required)
-router.get('/public/order/:orderNumber', async (req, res) => {
-  try {
-    const order = await prisma.order.findUnique({
-      where: { orderNumber: req.params.orderNumber },
-      select: {
-        orderNumber: true,
-        status: true,
-        type: true,
-        scheduledPickup: true,
-        estimatedReadyTime: true,
-        actualReadyTime: true,
-        total: true,
-        createdAt: true,
-        truck: {
-          select: { name: true, phone: true }
-        },
-        pickupWindow: {
-          include: {
-            truckLocation: {
-              include: {
-                location: {
-                  select: { name: true, address: true, city: true }
-                }
-              }
-            }
-          }
-        },
-        items: {
-          select: {
-            quantity: true,
-            menuItem: { select: { name: true } }
-          }
-        }
-      }
-    });
-
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-
-    res.json(order);
-  } catch (error) {
-    console.error('Track order error:', error);
-    res.status(500).json({ error: 'Failed to track order' });
-  }
-});
-
-// Create pre-order from public page (no auth required)
-router.post('/public/pre-order', async (req, res) => {
-  try {
-    const {
-      truckId, slotId, customerName, customerPhone, customerEmail,
-      items, notes
-    } = req.body;
-
-    if (!customerName || (!customerPhone && !customerEmail)) {
-      return res.status(400).json({ error: 'Customer name and contact info required' });
-    }
-
-    // Verify slot availability
-    const canOrder = await preOrderService.canPlacePreOrder(truckId, slotId);
-    if (!canOrder.allowed) {
-      return res.status(400).json({ error: canOrder.reason });
-    }
-
-    const slot = await prisma.preOrderWindow.findUnique({
-      where: { id: slotId }
-    });
-
-    let subtotal = 0;
-    const orderItems = [];
-
-    for (const item of items) {
-      const menuItem = await prisma.menuItem.findUnique({
-        where: { id: item.menuItemId }
-      });
-
-      if (!menuItem) {
-        return res.status(400).json({ error: `Menu item not found` });
-      }
-
-      const unitPrice = menuItem.isSpecial && menuItem.specialPrice
-        ? menuItem.specialPrice
-        : menuItem.price;
-      const totalPrice = unitPrice * item.quantity;
-      subtotal += totalPrice;
-
-      orderItems.push({
-        menuItemId: item.menuItemId,
-        quantity: item.quantity,
-        unitPrice,
-        totalPrice,
-        specialInstructions: item.specialInstructions
-      });
-    }
-
-    const tax = subtotal * 0.08;
-    const total = subtotal + tax;
-
-    const scheduledPickup = new Date(slot.date);
-    const [hours, minutes] = slot.slotStart.split(':').map(Number);
-    scheduledPickup.setHours(hours, minutes, 0, 0);
-
-    const order = await prisma.order.create({
-      data: {
-        orderNumber: generateOrderNumber(),
-        truckId,
-        type: 'PRE_ORDER',
-        customerName,
-        customerPhone,
-        customerEmail,
-        subtotal,
-        tax,
-        total,
-        notes,
-        status: 'PENDING',
-        paymentStatus: 'PENDING',
-        pickupWindowId: slotId,
-        scheduledPickup,
-        items: {
-          create: orderItems
-        }
-      },
-      select: {
-        id: true,
-        orderNumber: true,
-        status: true,
-        total: true,
-        scheduledPickup: true,
-        createdAt: true
-      }
-    });
-
-    await preOrderService.reserveSlot(slotId);
-    // Notification is optional - don't fail if it errors
-    try {
-      await notificationService.sendOrderNotification(order.id, 'ORDER_CONFIRMED');
-    } catch (notifError) {
-      console.error('Notification failed:', notifError);
-    }
-
-    res.status(201).json(order);
-  } catch (error) {
-    console.error('Create public pre-order error:', error);
-    res.status(500).json({ error: 'Failed to create pre-order' });
-  }
-});
+  const slot = await prisma.preOrderWindow.findUnique({ where: { id: input.pickupWindowId } });
+  if (!slot) throw new OrderWorkflowError('Pickup window not found', 404);
+  const scheduledPickup = new Date(slot.date);
+  const [hours, minutes] = slot.slotStart.split(':').map(Number);
+  scheduledPickup.setHours(hours, minutes, 0, 0);
+  input.scheduledPickup = scheduledPickup;
+  const taxEvidence = await taxEvidenceFor(input, key);
+  const order = await createReservedOrder({ input, taxEvidence, actorRole: 'CUSTOMER', context: requestContext(req, 'CUSTOMER_API') });
+  res.status(201).json(jsonSafe(order));
+}, req, res));
+
+router.post('/public/order/:orderNumber/cancel', (req, res) => handle(async () => {
+  const order = await prisma.order.findUnique({ where: { orderNumber: req.params.orderNumber } });
+  if (!order) throw new AccessError('Order not found', 404);
+  assertCustomerOrderAccess(order, req.get('x-order-access-token'));
+  const cancelled = await cancelOrder({
+    orderId: order.id,
+    reason: req.body.reason,
+    idempotencyKey: idempotencyKey(req),
+    actorRole: 'CUSTOMER',
+    context: requestContext(req, 'CUSTOMER_API'),
+  });
+  res.json(jsonSafe(cancelled));
+}, req, res));
+
+router.get('/public/truck/:truckId/available-slots', (req, res) => handle(async () => {
+  const slots = await preOrderService.getPublicSlots(req.params.truckId, { date: req.query.date, locationId: req.query.locationId });
+  res.json(slots);
+}, req, res));
+
+router.use(authenticate);
+
+router.get('/truck/:truckId', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'VIEWER');
+  const { page, limit, skip, search } = getPaginationParams(req.query);
+  const where = { truckId: req.params.truckId };
+  if (req.query.status) where.status = req.query.status;
+  if (req.query.type) where.type = req.query.type;
+  if (search) where.OR = [
+    { orderNumber: { contains: search, mode: 'insensitive' } },
+    { customerName: { contains: search, mode: 'insensitive' } },
+  ];
+  const [orders, total] = await Promise.all([
+    prisma.order.findMany({ where, include: { items: { include: { menuItem: true } } }, orderBy: { createdAt: 'desc' }, skip, take: limit }),
+    prisma.order.count({ where }),
+  ]);
+  res.json(paginatedResponse(orders, total, page, limit));
+}, req, res));
+
+router.get('/truck/:truckId/queue', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'VIEWER');
+  const orders = await prisma.order.findMany({
+    where: { truckId: req.params.truckId, status: { in: ['RESERVED', 'PAYMENT_PENDING', 'CONFIRMED', 'PREPARING', 'PARTIALLY_FULFILLED', 'READY', 'EXCEPTION'] } },
+    include: { items: { include: { menuItem: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  res.json({
+    reserved: orders.filter((order) => order.status === 'RESERVED'),
+    paymentPending: orders.filter((order) => order.status === 'PAYMENT_PENDING'),
+    confirmed: orders.filter((order) => order.status === 'CONFIRMED'),
+    preparing: orders.filter((order) => ['PREPARING', 'PARTIALLY_FULFILLED'].includes(order.status)),
+    ready: orders.filter((order) => order.status === 'READY'),
+    exceptions: orders.filter((order) => order.status === 'EXCEPTION'),
+  });
+}, req, res));
+
+router.get('/truck/:truckId/stats/today', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'VIEWER');
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const end = new Date(); end.setHours(23, 59, 59, 999);
+  const orders = await prisma.order.findMany({ where: { truckId: req.params.truckId, createdAt: { gte: start, lte: end } } });
+  const completed = orders.filter((order) => order.paymentStatus === 'COMPLETED' && order.status !== 'CANCELLED');
+  const revenueCents = completed.reduce((sum, order) => sum + order.totalCents - order.refundedCents, 0);
+  res.json({ totalOrders: orders.length, revenueCents, averageOrderCents: completed.length ? Math.round(revenueCents / completed.length) : 0, pickedUp: orders.filter((order) => order.status === 'PICKED_UP').length });
+}, req, res));
+
+router.get('/truck/:truckId/pre-order/slots', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'VIEWER');
+  res.json(await preOrderService.getSlotsByTruck(req.params.truckId, req.query));
+}, req, res));
+
+router.post('/truck/:truckId/pre-order/generate-slots', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'MANAGER');
+  if (!req.body.truckLocationId) throw new OrderWorkflowError('truckLocationId is required', 400);
+  res.status(201).json(await preOrderService.generateTimeSlots(req.body.truckLocationId));
+}, req, res));
+
+router.get('/truck/:truckId/pre-order/settings', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'VIEWER');
+  res.json(await preOrderService.getSettings(req.params.truckId));
+}, req, res));
+
+router.put('/truck/:truckId/pre-order/settings', (req, res) => handle(async () => {
+  await assertTruckAccess(req.user, req.params.truckId, 'MANAGER');
+  res.json(await preOrderService.updateSettings(req.params.truckId, req.body));
+}, req, res));
+
+router.post('/', (req, res) => handle(async () => {
+  const role = await assertTruckAccess(req.user, req.body.truckId, 'OPERATOR');
+  const key = idempotencyKey(req);
+  const input = { ...req.body, idempotencyKey: key };
+  const taxEvidence = await taxEvidenceFor(input, key);
+  const order = await createReservedOrder({ input, taxEvidence, actor: req.user, actorRole: role, context: requestContext(req) });
+  res.status(201).json(jsonSafe(order));
+}, req, res));
+
+router.get('/:id', (req, res) => handle(async () => {
+  await assertOrderAccess(req.user, req.params.id, 'VIEWER');
+  res.json(jsonSafe(await getOrder(req.params.id)));
+}, req, res));
+
+router.post('/:id/payment', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  const order = await getOrder(req.params.id);
+  const key = idempotencyKey(req);
+  const evidence = await callCommerceProvider('PAYMENT', {
+    sourceOrderRef: order.orderNumber, idempotencyKey: key, currency: order.currency,
+    amountCents: order.totalCents - order.refundedCents,
+    metadata: { orderId: order.id, paymentMethod: req.body.paymentMethod || order.paymentMethod },
+  });
+  res.json(jsonSafe(await applyPaymentEvidence({ orderId: order.id, evidence, idempotencyKey: key, actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/delivery', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  const order = await getOrder(req.params.id);
+  const key = idempotencyKey(req);
+  const evidence = await callCommerceProvider('DELIVERY', {
+    sourceOrderRef: order.orderNumber, idempotencyKey: key, currency: order.currency,
+    amountCents: order.totalCents, destination: req.body.destination,
+    metadata: { orderId: order.id, pickupAt: order.scheduledPickup },
+  });
+  res.json(jsonSafe(await applyDeliveryEvidence({ orderId: order.id, evidence, idempotencyKey: key, actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/start-preparation', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  res.json(jsonSafe(await transitionOrder({ orderId: req.params.id, toStatus: 'PREPARING', eventType: 'PREPARATION_STARTED', idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/fulfillment', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  res.json(jsonSafe(await fulfillOrder({ orderId: req.params.id, quantities: req.body.quantities, idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/pickup', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  res.json(jsonSafe(await transitionOrder({ orderId: req.params.id, toStatus: 'PICKED_UP', eventType: 'ORDER_PICKED_UP', idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/refunds', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'MANAGER');
+  const order = await getOrder(req.params.id);
+  const key = idempotencyKey(req);
+  const evidence = await callCommerceProvider('REFUND', {
+    sourceOrderRef: order.orderNumber, idempotencyKey: key, currency: order.currency,
+    amountCents: req.body.amountCents, metadata: { orderId: order.id, reason: req.body.reason },
+  });
+  res.json(jsonSafe(await refundOrder({ orderId: order.id, amountCents: req.body.amountCents, reason: req.body.reason, evidence, idempotencyKey: key, actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/cancel', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'OPERATOR');
+  res.json(jsonSafe(await cancelOrder({ orderId: req.params.id, reason: req.body.reason, idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/exceptions', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'MANAGER');
+  res.json(jsonSafe(await markOrderException({ orderId: req.params.id, code: req.body.code, message: req.body.message, idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/recover', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'MANAGER');
+  res.json(jsonSafe(await recoverOrder({ orderId: req.params.id, note: req.body.note, idempotencyKey: idempotencyKey(req), actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.post('/:id/reconcile', (req, res) => handle(async () => {
+  const { role } = await assertOrderAccess(req.user, req.params.id, 'MANAGER');
+  const order = await getOrder(req.params.id);
+  const key = idempotencyKey(req);
+  const evidence = await callCommerceProvider('RECONCILIATION', {
+    sourceOrderRef: order.orderNumber, idempotencyKey: key, currency: order.currency,
+    amountCents: order.totalCents, metadata: { orderId: order.id, paymentIntentId: order.paymentIntentId },
+  });
+  res.json(jsonSafe(await reconcilePayment({ orderId: order.id, evidence, idempotencyKey: key, actor: req.user, actorRole: role, context: requestContext(req) })));
+}, req, res));
+
+router.get('/:id/audit', (req, res) => handle(async () => {
+  await assertOrderAccess(req.user, req.params.id, 'MANAGER');
+  const order = await getOrder(req.params.id);
+  res.json(jsonSafe({ orderId: order.id, chainValid: await verifyOrderAuditChain(order.id), events: order.events, providerEvents: order.providerEvents, refunds: order.refunds }));
+}, req, res));
 
 module.exports = router;

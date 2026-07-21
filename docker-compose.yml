@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: backend
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: backend
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      CUSTOMER_TOKEN_SECRET: ${CUSTOMER_TOKEN_SECRET:?set CUSTOMER_TOKEN_SECRET}
+      COMMERCE_WEBHOOK_SECRET: ${COMMERCE_WEBHOOK_SECRET:?set COMMERCE_WEBHOOK_SECRET}
+      TAX_PROVIDER_URL: ${TAX_PROVIDER_URL:?set TAX_PROVIDER_URL}
+      TAX_PROVIDER_TOKEN: ${TAX_PROVIDER_TOKEN:?set TAX_PROVIDER_TOKEN}
+      PAYMENT_PROVIDER_URL: ${PAYMENT_PROVIDER_URL:?set PAYMENT_PROVIDER_URL}
+      PAYMENT_PROVIDER_TOKEN: ${PAYMENT_PROVIDER_TOKEN:?set PAYMENT_PROVIDER_TOKEN}
+      DELIVERY_PROVIDER_URL: ${DELIVERY_PROVIDER_URL:?set DELIVERY_PROVIDER_URL}
+      DELIVERY_PROVIDER_TOKEN: ${DELIVERY_PROVIDER_TOKEN:?set DELIVERY_PROVIDER_TOKEN}
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:?set SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:?set SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS:?set SMTP_PASS}
+      EMAIL_FROM: ${EMAIL_FROM:?set EMAIL_FROM}
+      SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:?set SMS_PROVIDER_URL}
+      SMS_PROVIDER_TOKEN: ${SMS_PROVIDER_TOKEN:?set SMS_PROVIDER_TOKEN}
+      WEATHER_API_KEY: ${WEATHER_API_KEY:?set WEATHER_API_KEY}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

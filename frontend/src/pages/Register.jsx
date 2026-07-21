@@ -57,7 +57,7 @@ export default function Register() {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-white rounded-full mb-4">
             <Truck className="h-8 w-8 text-primary-600" />
           </div>
-          <h1 className="text-3xl font-bold text-white">Food Truck AI</h1>
+          <h1 className="text-3xl font-bold text-white">Food Truck Operations</h1>
           <p className="text-primary-100 mt-2">Create your account</p>
         </div>
 

@@ -1,5 +1,5 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
+const { requireConfig } = require('../lib/secrets');
 
 // Weather API integration (OpenWeatherMap)
 // Set WEATHER_API_KEY in environment variables
@@ -8,12 +8,7 @@ const WEATHER_API_BASE = 'https://api.openweathermap.org/data/2.5';
 
 // Fetch weather from API
 async function fetchWeatherFromAPI(latitude, longitude, date = null) {
-  const apiKey = process.env.WEATHER_API_KEY;
-
-  if (!apiKey) {
-    console.warn('WEATHER_API_KEY not set, using mock weather data');
-    return getMockWeather(date);
-  }
+  const apiKey = requireConfig('WEATHER_API_KEY');
 
   try {
     // For current/near-future weather, use current weather endpoint
@@ -36,34 +31,8 @@ async function fetchWeatherFromAPI(latitude, longitude, date = null) {
       icon: data.weather[0].icon
     };
   } catch (error) {
-    console.error('Weather API error:', error);
-    return getMockWeather(date);
+    throw new Error(`Weather provider failed: ${error.message}`);
   }
-}
-
-// Get mock weather for development
-function getMockWeather(date) {
-  const conditions = ['Clear', 'Clouds', 'Rain', 'Drizzle', 'Thunderstorm', 'Snow'];
-  const d = date ? new Date(date) : new Date();
-  const month = d.getMonth();
-
-  // Seasonal temperature ranges
-  let tempBase;
-  if (month >= 5 && month <= 8) tempBase = 75; // Summer
-  else if (month >= 11 || month <= 2) tempBase = 45; // Winter
-  else tempBase = 60; // Spring/Fall
-
-  const temp = tempBase + (Math.random() * 20 - 10);
-  const conditionIndex = Math.floor(Math.random() * (month >= 11 || month <= 2 ? 6 : 4));
-
-  return {
-    temperature: Math.round(temp),
-    conditions: conditions[conditionIndex],
-    description: conditions[conditionIndex].toLowerCase(),
-    humidity: Math.round(40 + Math.random() * 40),
-    windSpeed: Math.round(5 + Math.random() * 15),
-    icon: '01d'
-  };
 }
 
 // Get weather with caching

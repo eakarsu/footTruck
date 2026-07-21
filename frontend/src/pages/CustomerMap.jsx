@@ -83,11 +83,7 @@ export default function CustomerMap() {
   });
 
   useEffect(() => {
-    // Default to Austin, TX (where demo trucks are located)
-    setUserLocation({ lat: 30.2672, lng: -97.7431 });
-    setLoading(false);
-    // Skip geolocation for demo - trucks are in Austin
-    // getUserLocation();
+    getUserLocation();
   }, []);
 
   useEffect(() => {
@@ -102,10 +98,8 @@ export default function CustomerMap() {
     setError(null);
 
     if (!navigator.geolocation) {
-      setError('Geolocation is not supported');
+      setError('Geolocation is required to find nearby trucks. Enable location access and try again.');
       setLoading(false);
-      // Default to a location
-      setUserLocation({ lat: 30.2672, lng: -97.7431 });
       return;
     }
 
@@ -119,9 +113,7 @@ export default function CustomerMap() {
       },
       (err) => {
         console.error('Geolocation error:', err);
-        setError('Unable to get your location. Showing default area.');
-        // Default to NYC
-        setUserLocation({ lat: 30.2672, lng: -97.7431 });
+        setError('Unable to get your location. Enable location access and try again.');
         setLoading(false);
       },
       { enableHighAccuracy: true, timeout: 10000 }
@@ -163,6 +155,21 @@ export default function CustomerMap() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
           <p className="text-gray-500">Getting your location...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!userLocation) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-100 p-6">
+        <div className="card max-w-md p-6 text-center">
+          <MapPin className="h-12 w-12 text-primary-600 mx-auto mb-4" />
+          <h1 className="text-xl font-semibold mb-2">Location access required</h1>
+          <p className="text-gray-600 mb-4">{error || 'Allow location access to search for food trucks near you.'}</p>
+          <button type="button" onClick={getUserLocation} className="btn btn-primary">
+            Try again
+          </button>
         </div>
       </div>
     );

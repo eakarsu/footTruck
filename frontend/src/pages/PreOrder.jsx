@@ -25,6 +25,7 @@ export default function PreOrder() {
   });
   const [orderResult, setOrderResult] = useState(null);
   const [trackingNumber, setTrackingNumber] = useState('');
+  const [trackingToken, setTrackingToken] = useState('');
   const [trackedOrder, setTrackedOrder] = useState(null);
 
   useEffect(() => {
@@ -92,8 +93,7 @@ export default function PreOrder() {
 
   const getCartTotal = () => {
     const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    const tax = subtotal * 0.08;
-    return { subtotal, tax, total: subtotal + tax };
+    return { subtotal };
   };
 
   const handleSubmitOrder = async () => {
@@ -104,6 +104,7 @@ export default function PreOrder() {
 
     try {
       setLoading(true);
+      const requestKey = crypto.randomUUID();
       const res = await ordersAPI.createPreOrder({
         truckId,
         slotId: selectedSlot.id,
@@ -112,7 +113,8 @@ export default function PreOrder() {
         customerEmail: customerInfo.email,
         items: cart.map(c => ({ menuItemId: c.menuItemId, quantity: c.quantity })),
         notes: customerInfo.notes
-      });
+      }, requestKey);
+      sessionStorage.setItem(`order-access:${res.data.orderNumber}`, res.data.customerAccessToken);
       setOrderResult(res.data);
       setStep(4);
       toast.success('Order placed successfully!');
@@ -130,7 +132,12 @@ export default function PreOrder() {
     }
 
     try {
-      const res = await ordersAPI.trackOrder(trackingNumber);
+      const token = trackingToken || sessionStorage.getItem(`order-access:${trackingNumber}`);
+      if (!token) {
+        toast.error('Enter the private access token returned with your order');
+        return;
+      }
+      const res = await ordersAPI.trackOrder(trackingNumber, token);
       setTrackedOrder(res.data);
     } catch (error) {
       toast.error('Order not found');
@@ -138,7 +145,7 @@ export default function PreOrder() {
     }
   };
 
-  const { subtotal, tax, total } = getCartTotal();
+  const { subtotal } = getCartTotal();
 
   if (!truckId) {
     return (
@@ -159,6 +166,14 @@ export default function PreOrder() {
                 <Search className="h-4 w-4" />
               </button>
             </div>
+            <label className="label mt-4">Private order access token</label>
+            <input
+              type="password"
+              value={trackingToken}
+              onChange={(event) => setTrackingToken(event.target.value)}
+              className="input"
+              autoComplete="off"
+            />
           </div>
 
           {trackedOrder && (
@@ -185,7 +200,7 @@ export default function PreOrder() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Total</span>
-                  <span className="font-bold">${trackedOrder.total?.toFixed(2)}</span>
+                  <span className="font-bold">${((trackedOrder.totalCents || 0) / 100).toFixed(2)}</span>
                 </div>
                 <div className="border-t pt-3 mt-3">
                   <p className="text-sm text-gray-500 mb-2">Items:</p>
@@ -328,7 +343,7 @@ export default function PreOrder() {
                 <div className="max-w-3xl mx-auto flex items-center justify-between">
                   <div>
                     <p className="text-sm text-gray-500">{cart.reduce((sum, c) => sum + c.quantity, 0)} items</p>
-                    <p className="font-bold">${total.toFixed(2)}</p>
+                    <p className="font-bold">${subtotal.toFixed(2)} before tax</p>
                   </div>
                   <button onClick={() => setStep(3)} className="btn btn-primary">
                     Continue <ShoppingCart className="h-4 w-4 ml-2" />
@@ -410,11 +425,11 @@ export default function PreOrder() {
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>Tax</span>
-                    <span>${tax.toFixed(2)}</span>
+                    <span>Calculated by the configured tax provider</span>
                   </div>
                   <div className="flex justify-between font-bold text-lg mt-2">
-                    <span>Total</span>
-                    <span>${total.toFixed(2)}</span>
+                    <span>Subtotal before tax</span>
+                    <span>${subtotal.toFixed(2)}</span>
                   </div>
                 </div>
               </div>

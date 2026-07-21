@@ -1,12 +1,11 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
 const { authenticate } = require('../middleware/auth');
+const { requireTruckAccess } = require('../middleware/truckAccess');
+const prisma = require('../lib/prisma');
 
 const router = express.Router();
-const prisma = new PrismaClient();
-
 // Get dashboard summary for a truck
-router.get('/truck/:truckId/summary', authenticate, async (req, res) => {
+router.get('/truck/:truckId/summary', authenticate, requireTruckAccess('VIEWER'), async (req, res) => {
   try {
     const truckId = req.params.truckId;
     const today = new Date();
@@ -29,8 +28,7 @@ router.get('/truck/:truckId/summary', authenticate, async (req, res) => {
       lowStockItems,
       upcomingLocations,
       expiringPermits,
-      upcomingEvents,
-      recentRecommendations
+      upcomingEvents
     ] = await Promise.all([
       // Today's orders
       prisma.order.count({
@@ -109,12 +107,6 @@ router.get('/truck/:truckId/summary', authenticate, async (req, res) => {
         },
         include: { event: true },
         take: 5
-      }),
-      // Recent AI recommendations
-      prisma.aIRecommendation.findMany({
-        where: { truckId, isActioned: false },
-        orderBy: { createdAt: 'desc' },
-        take: 3
       })
     ]);
 
@@ -139,8 +131,7 @@ router.get('/truck/:truckId/summary', authenticate, async (req, res) => {
       upcoming: {
         locations: upcomingLocations,
         events: upcomingEvents.map(e => e.event)
-      },
-      aiRecommendations: recentRecommendations
+      }
     });
   } catch (error) {
     console.error('Get dashboard error:', error);
