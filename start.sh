@@ -95,6 +95,8 @@ for assigned_port in "$BACKEND_PORT" "$FRONTEND_PORT";do [[ "$assigned_port" =~ 
 [ -d "$PROJECT_DIR/frontend/node_modules" ]&&[ -d "$PROJECT_DIR/backend/node_modules" ]||{ echo "Runtime dependencies are missing" >&2;exit 1; }
 export RUNTIME_PROJECT_NAME=footTruck RUNTIME_AI_ENDPOINT=/api/ai/food-truck-operations-review RUNTIME_AI_FEATURE=food-truck-operations-review
 export RUNTIME_AI_SYSTEM_PROMPT='You are a food-truck operations assistant. Review inventory, food safety, staffing, location, order, refund, and audit evidence with explicit operator approval gates.'
+echo "AI workspace: http://127.0.0.1:$BACKEND_PORT/ai-workspace"
+export VITE_NATIVE_AI_WORKSPACE_URL="http://127.0.0.1:$BACKEND_PORT/ai-workspace" REACT_APP_NATIVE_AI_WORKSPACE_URL="http://127.0.0.1:$BACKEND_PORT/ai-workspace"
 node "$PROJECT_DIR/runtime/setup.mjs"
 CHILD_PIDS=()
 (cd "$PROJECT_DIR"&&exec node runtime/api.mjs)&CHILD_PIDS+=("$!")

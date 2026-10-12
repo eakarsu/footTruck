@@ -125,7 +125,7 @@ export default function Layout({ children }) {
           </div>
 
           {/* Navigation */}
-          <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+          <nav className="flex-1 overflow-y-auto p-4 space-y-1">{import.meta.env.VITE_NATIVE_AI_WORKSPACE_URL && <a href={import.meta.env.VITE_NATIVE_AI_WORKSPACE_URL} target="_blank" rel="noopener" className="sidebar-link">AI workspace</a>}
             {navItems.map(item => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
