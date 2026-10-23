@@ -9,15 +9,15 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [demoError, setDemoError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const submitLogin = async (loginEmail, loginPassword) => {
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(loginEmail, loginPassword);
       toast.success('Welcome back!');
       navigate('/');
     } catch (error) {
@@ -25,6 +25,21 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await submitLogin(email, password);
+  };
+
+  const handleDemoFill = async () => {
+    if (import.meta.env.VITE_DEMO_EMAIL && import.meta.env.VITE_DEMO_PASSWORD) { setEmail(import.meta.env.VITE_DEMO_EMAIL); setPassword(import.meta.env.VITE_DEMO_PASSWORD); setDemoError(''); return; }
+    try {
+      const res = await fetch('/api/auth/demo-credentials', { cache: 'no-store' });
+      const data = await res.json();
+      if (data?.email && data?.password) { setEmail(data.email); setPassword(data.password); setDemoError(''); return; }
+    } catch {}
+    setDemoError('Demo credentials are not configured for this environment.');
   };
 
   return (
@@ -73,18 +88,15 @@ export default function Login() {
               </div>
             </div>
 
+            {demoError && <p style={{ color: '#dc2626', fontSize: '14px' }}>{demoError}</p>}
             <button
-              type="button"
-              onClick={() => {
-                setEmail(import.meta.env.VITE_DEMO_EMAIL || '');
-                setPassword(import.meta.env.VITE_DEMO_PASSWORD || '');
-              }}
-              disabled={!import.meta.env.VITE_DEMO_EMAIL || !import.meta.env.VITE_DEMO_PASSWORD}
-              aria-label="Fill demo credentials"
-              style={{ width: '100%', marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', border: '1px solid currentColor', background: 'transparent', cursor: 'pointer' }}
-            >
-              Fill demo credentials
-            </button>
+                type="button"
+                onClick={handleDemoFill}
+                aria-label="Fill demo credentials"
+                style={{ width: '100%', marginBottom: '12px', padding: '10px 14px', borderRadius: '8px', border: '1px solid currentColor', background: 'transparent', cursor: 'pointer' }}
+              >
+                Fill demo credentials
+              </button>
             <button
               type="submit"
               disabled={loading}

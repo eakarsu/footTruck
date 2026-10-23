@@ -82,7 +82,7 @@ load_env_file(){ local line key value;while IFS= read -r line||[ -n "$line" ];do
 [ -f "$ENV_FILE" ]||{ echo "Missing required file: $ENV_FILE" >&2;exit 1; };load_env_file
 export PATH="/opt/homebrew/bin:$PATH"
 case "${1:-start}" in
-  check) cd "$PROJECT_DIR/backend";npm run lint ;;
+  check) cd "$PROJECT_DIR/backend";exec npm run lint ;;
   migrate) [[ "${ALLOW_SCHEMA_MIGRATION:-}" =~ ^(1|true)$ ]]||{ echo "Set ALLOW_SCHEMA_MIGRATION=1 for explicit migration" >&2;exit 1; };cd "$PROJECT_DIR/backend";exec npm run prisma:migrate ;;
   start) ;;
   *) echo "Usage: $0 [start|check|migrate]" >&2;exit 64 ;;
@@ -98,8 +98,19 @@ export RUNTIME_AI_SYSTEM_PROMPT='You are a food-truck operations assistant. Revi
 echo "AI workspace: http://127.0.0.1:$BACKEND_PORT/ai-workspace"
 export VITE_NATIVE_AI_WORKSPACE_URL="http://127.0.0.1:$BACKEND_PORT/ai-workspace" REACT_APP_NATIVE_AI_WORKSPACE_URL="http://127.0.0.1:$BACKEND_PORT/ai-workspace"
 node "$PROJECT_DIR/runtime/setup.mjs"
+# Self-heal (empty-DB fix): ensure schema, then seed-if-empty (seed creates the admin).
+if [ "$(psql "$DATABASE_URL" -At -c "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='User';" 2>/dev/null || true)" != "1" ]; then
+  echo "Application schema missing; replaying Prisma migrations to recreate tables" >&2
+  for migration_sql in "$PROJECT_DIR"/backend/prisma/migrations/*/migration.sql; do psql "$DATABASE_URL" -q -v ON_ERROR_STOP=0 -f "$migration_sql" >/dev/null 2>&1 || true; done
+  psql "$DATABASE_URL" -q -v ON_ERROR_STOP=0 -c 'CREATE TABLE IF NOT EXISTS "_prisma_migrations" (id VARCHAR(36) PRIMARY KEY, checksum VARCHAR(64) NOT NULL, finished_at TIMESTAMPTZ, migration_name VARCHAR(255) NOT NULL, logs TEXT, rolled_back_at TIMESTAMPTZ, started_at TIMESTAMPTZ NOT NULL DEFAULT now(), applied_steps_count INTEGER NOT NULL DEFAULT 0);' >/dev/null 2>&1 || true
+  for migration_sql in "$PROJECT_DIR"/backend/prisma/migrations/*/migration.sql; do migration_name="$(basename "$(dirname "$migration_sql")")"; migration_checksum="$(shasum -a 256 "$migration_sql" | awk '{print $1}')"; psql "$DATABASE_URL" -q -v ON_ERROR_STOP=0 -c "INSERT INTO \"_prisma_migrations\"(id,checksum,finished_at,migration_name,applied_steps_count) SELECT gen_random_uuid()::text, '$migration_checksum', now(), '$migration_name', 1 WHERE NOT EXISTS (SELECT 1 FROM \"_prisma_migrations\" WHERE migration_name='$migration_name');" >/dev/null 2>&1 || true; done
+fi
+if [ "$(psql "$DATABASE_URL" -At -c 'SELECT count(*) FROM "User";' 2>/dev/null || echo 1)" = "0" ]; then
+  (cd "$PROJECT_DIR/backend" && node prisma/seed.js) || echo "Fixture seed failed; continuing without seeded data" >&2
+fi
 CHILD_PIDS=()
-(cd "$PROJECT_DIR"&&exec node runtime/api.mjs)&CHILD_PIDS+=("$!")
+export PORT="$BACKEND_PORT" CORS_ALLOWED_ORIGINS="http://127.0.0.1:$FRONTEND_PORT" CORS_ORIGIN="http://127.0.0.1:$FRONTEND_PORT" CORS_ORIGINS="http://127.0.0.1:$FRONTEND_PORT"
+(cd "$PROJECT_DIR/backend"&&exec node src/index.js)&CHILD_PIDS+=("$!")
 (cd "$PROJECT_DIR/frontend"&&exec npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort)&CHILD_PIDS+=("$!")
 cleanup(){ trap - EXIT INT TERM;for pid in "${CHILD_PIDS[@]}";do kill "$pid" 2>/dev/null||true;done;for pid in "${CHILD_PIDS[@]}";do wait "$pid" 2>/dev/null||true;done; }
 trap cleanup EXIT INT TERM
